@@ -1,0 +1,13 @@
+.env
+.venv/
+__pycache__/
+*.parquet
+*.png
+*.pt
+*.pkl
+models/*.pt
+models/*.pkl
+data/raw/
+data/processed/
+.DS_Store
+

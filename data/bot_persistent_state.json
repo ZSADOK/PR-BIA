@@ -1,0 +1,18 @@
+{
+  "position_peak_pl": {
+    "UNG": 0.402,
+    "NFLX": 0.327,
+    "SOUN": 0.086,
+    "AMD": 1.3780000000000001,
+    "AVAXUSD": 0.0,
+    "IONQ": 0.11399999999999999,
+    "TAN": 0.0,
+    "TSM": 0.0
+  },
+  "stop_loss_cooldown": {},
+  "unsupported_assets": [
+    "NEARUSD",
+    "NEAR/USD"
+  ],
+  "last_updated": 1785403998.238836
+}
