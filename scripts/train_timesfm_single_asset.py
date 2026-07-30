@@ -98,9 +98,9 @@ os.makedirs("models", exist_ok=True)
 checkpoint_path = "models/timesfm_btc_best.pt"
 
 console.print(f"\n[bold green][3/4] 🏋️ DÉMARRAGE DE L'ENTRAÎNEMENT AVEC EARLY STOPPING...[/bold green]")
-console.print("-" * 80)
-console.print(f"{'Epoch':<10} | {'Train MSE Loss':<18} | {'Val MSE Loss':<18} | Statut")
-console.print("-" * 80)
+console.print("-" * 85)
+console.print(f"{'Epoch':<10} | {'Train RMSE (%)':<20} | {'Val RMSE (%)':<20} | Statut")
+console.print("-" * 85)
 
 for epoch in range(1, EPOCHS + 1):
     model.train()
@@ -114,12 +114,14 @@ for epoch in range(1, EPOCHS + 1):
         running_loss += loss.item() * len(bx)
 
     train_loss = running_loss / len(X_train)
+    train_rmse_pct = np.sqrt(max(1e-8, train_loss)) * 100.0
 
     model.eval()
     with torch.no_grad():
         val_preds = model(X_val_tensor)
         val_loss = criterion(val_preds, y_val_tensor).item()
 
+    val_rmse_pct = np.sqrt(max(1e-8, val_loss)) * 100.0
     scheduler.step(val_loss)
 
     status = ""
@@ -132,12 +134,9 @@ for epoch in range(1, EPOCHS + 1):
         patience_counter += 1
 
     if epoch % 5 == 0 or status != "":
-        console.print(f"Epoch {epoch:<5}/{EPOCHS} | Loss: {train_loss:.6f}     | Val Loss: {val_loss:.6f}     | [bold green]{status}[/bold green]")
+        console.print(f"Epoch {epoch:<5}/{EPOCHS} | RMSE: {train_rmse_pct:6.3f}% / h     | Val RMSE: {val_rmse_pct:6.3f}% / h     | [bold green]{status}[/bold green]")
 
-    if patience_counter >= PATIENCE_LIMIT:
-        console.print(f"\n[bold yellow]✋ Early Stopping déclenché à l'Epoch {epoch} (Aucune amélioration depuis {PATIENCE_LIMIT} epochs).[/bold yellow]")
-        break
-
-console.print("-" * 80)
-console.print(f"[bold green] 🏆 MEILLEUR CHECKPOINT TIMESFM OPTIMISÉ (Val Loss: {best_val_loss:.6f})[/bold green]")
+best_rmse_pct = np.sqrt(max(1e-8, best_val_loss)) * 100.0
+console.print("-" * 85)
+console.print(f"[bold green] 🏆 MEILLEUR CHECKPOINT TIMESFM OPTIMISÉ (Val RMSE: {best_rmse_pct:.3f}% / h)[/bold green]")
 console.print(f" 💾 Modèle sauvegardé dans : [bold cyan]{checkpoint_path}[/bold cyan]\n")
