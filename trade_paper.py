@@ -139,7 +139,6 @@ def run_live_second_monitor(duration_sec: int):
 def main():
     parser = argparse.ArgumentParser(description="Bot de Trading Automatisé Continu Alpaca Paper Trading")
     parser.add_argument("--train", action="store_true", help="Lancer l'entraînement 3-Split (Train/Val/Test Holdout) optimisé CAUM")
-    parser.add_argument("--double_descent", action="store_true", help="Lancer l'entraînement Deep Learning Double Descent (3 000 Epochs Transformer)")
     parser.add_argument("--run_all", action="store_true", help="Lancer le scanner multi-actifs")
     parser.add_argument("--continuous", action="store_true", help="Tourner en boucle infinie continue 24/7 avec monitoring 1s")
     parser.add_argument("--interval_sec", type=int, default=300, help="Intervalle en secondes entre 2 scans (défaut: 300s = 5 min)")
@@ -154,10 +153,7 @@ def main():
 
     args = parser.parse_args()
 
-    if args.double_descent:
-        import subprocess
-        subprocess.run([".venv/bin/python", "scripts/train_tabfm_double_descent.py"])
-    elif args.train:
+    if args.train:
         import subprocess
         subprocess.run(["python3", "scripts/train_crypto_3split_pipeline.py"])
     elif args.sell_all:
