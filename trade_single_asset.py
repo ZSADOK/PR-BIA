@@ -129,7 +129,7 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
         pos_str = "[yellow]AUCUNE (100% CASH LIQUIDE)[/yellow]"
 
     # Construction de la Table
-    table = Table(title=f"📊 MODÈLE TIMESFM FINETUNED | STATUT APPRENTISSAGE: {'[GREEN]ENTRAÎNÉ[/GREEN]' if is_trained else '[YELLOW]ZERO-SHOT[/YELLOW]'}", expand=True)
+    table = Table(title=f"📊 MODÈLE TIMESFM FINETUNED | STATUT APPRENTISSAGE: {'[green]ENTRAÎNÉ[/green]' if is_trained else '[yellow]ZERO-SHOT[/yellow]'}", expand=True)
     table.add_column("Métrique Financière", style="cyan", justify="left")
     table.add_column("Valeur / Signal", style="bold white", justify="right")
 
