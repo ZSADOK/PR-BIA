@@ -16,6 +16,7 @@ from torch.utils.data import TensorDataset, DataLoader
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from src.trading_config import console
+from src.models import CryptoCustomUtilityMetric
 
 console.print("\n[bold cyan]================================================================================[/bold cyan]")
 console.print("[bold yellow] 🚀 ENTRAÎNEMENT SOTA TIMESFM SINGLE-ASSET (BTC-USD) AVEC EARLY STOPPING [/bold yellow]")
