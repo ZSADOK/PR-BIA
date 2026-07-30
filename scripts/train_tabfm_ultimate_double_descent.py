@@ -34,13 +34,20 @@ print(f"\n[1/5] 📈 Téléchargement du Dataset Spécialiste Unique Intraday ({
 data = yf.download(SINGLE_TICKER, period="730d", interval="1h", progress=False)
 
 def apply_triple_barrier_and_features(df: pd.DataFrame, pt_mult=1.5, sl_mult=1.0, max_holding=12) -> pd.DataFrame:
-    close = df["Close"].dropna()
-    volume = df["Volume"].dropna()
+    close_series = df["Close"].iloc[:, 0] if isinstance(df["Close"], pd.DataFrame) else df["Close"]
+    volume_series = df["Volume"].iloc[:, 0] if isinstance(df["Volume"], pd.DataFrame) else df["Volume"]
+    
+    close = close_series.dropna()
+    volume = volume_series.dropna()
     log_ret = np.log(close / close.shift(1))
     
-    # 2. Lissage de Tendance Savitzky-Golay (Signal Propre)
-    clean_signal = savgol_filter(close.values, window_length=21, polyorder=2) if len(close) > 21 else close.values
-    trend_dev = (close.values - clean_signal) / (clean_signal + 1e-8)
+    close_vals = close.values.flatten()
+    if len(close_vals) > 25:
+        clean_signal = savgol_filter(close_vals, window_length=21, polyorder=2, mode='nearest')
+    else:
+        clean_signal = close_vals
+
+    trend_dev = (close_vals - clean_signal) / (clean_signal + 1e-8)
     
     feat = pd.DataFrame(index=close.index)
     feat["trend_dev_smooth"] = trend_dev
