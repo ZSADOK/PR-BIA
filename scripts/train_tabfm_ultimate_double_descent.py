@@ -1,10 +1,10 @@
 """
 Pipeline d'Entraînement Ultime Double Descente SOTA (10,000 Epochs & Triple Barrier Method)
-Implémente scrupuleusement les 5 piliers institutionnels :
-1. Dataset Multi-Actifs Haute Densité (100,000+ échantillons)
+Focus 100% Spécialisation Actif Maître Unique : BTC-USD (Bitcoin) Haute Densité Intraday
+1. Dataset Spécialiste Unique (BTC-USD Haute Densité)
 2. Labeling par Méthode Triple Barrier (López de Prado) & Lissage Savitzky-Golay
 3. Deep Residual Tabular Transformer avec Skip Connections (10M Paramètres)
-4. Scheduler Cosine Decay Continu sur 10 000 Epochs (Sans Warm Restarts perturbateurs)
+4. Scheduler Cosine Decay Continu sur 10 000 Epochs
 """
 
 import os
@@ -24,21 +24,18 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from src.models.crypto_utility_metric import CryptoCustomUtilityMetric
 
 print("=" * 100)
-print(" 🏛️ PIPELINE DEEP LEARNING ULTIME : DOUBLE DESCENTE SUR-PARAMÉTRÉE (10,000 EPOCHS)")
-print(" Implémentation du Triple Barrier Method (López de Prado) & Transformer Résiduel (10M Paramètres)")
+print(" 🏛️ PIPELINE DEEP LEARNING ULTIME : SPÉCIALISATION ACTIF MAÎTRE UNIQUE (BTC-USD)")
+print(" Double Descente Sur-Paramétrée (10,000 Epochs, Triple Barrier Method & Transformer 10M)")
 print("=" * 100)
 
-# 1. Dataset Multi-Actifs Haute Densité Intraday (1h - 100 000+ Échantillons)
-CRYPTO_TICKERS = ["BTC-USD", "ETH-USD", "SOL-USD", "AVAX-USD", "BNB-USD", "XRP-USD"]
-print(f"\n[1/5] 📈 Téléchargement du Dataset Haute Densité Intraday (100,000+ échantillons)...")
-data = yf.download(CRYPTO_TICKERS, period="730d", interval="1h", group_by="ticker", progress=False)
+# 1. Dataset Spécialiste Unique Haute Densité Intraday (BTC-USD)
+SINGLE_TICKER = "BTC-USD"
+print(f"\n[1/5] 📈 Téléchargement du Dataset Spécialiste Unique Intraday ({SINGLE_TICKER})...")
+data = yf.download(SINGLE_TICKER, period="730d", interval="1h", progress=False)
 
 def apply_triple_barrier_and_features(df: pd.DataFrame, pt_mult=1.5, sl_mult=1.0, max_holding=12) -> pd.DataFrame:
     close = df["Close"].dropna()
     volume = df["Volume"].dropna()
-    high = df["High"].dropna()
-    low = df["Low"].dropna()
-    
     log_ret = np.log(close / close.shift(1))
     
     # 2. Lissage de Tendance Savitzky-Golay (Signal Propre)
@@ -73,17 +70,17 @@ def apply_triple_barrier_and_features(df: pd.DataFrame, pt_mult=1.5, sl_mult=1.0
         target_pt = prices[i] * (1.0 + pt_mult * vols[i])
         target_sl = prices[i] * (1.0 - sl_mult * vols[i])
         
-        barrier_hit = 0 # 0 = Expiration / Vertical Barrier
+        barrier_hit = 0
         fut_ret = (prices[i + max_holding] - prices[i]) / prices[i]
         
         for h in range(1, max_holding + 1):
             p_future = prices[i + h]
             if p_future >= target_pt:
-                barrier_hit = 1 # Profit Target Touclé (Achat Gagnant)
+                barrier_hit = 1
                 fut_ret = (target_pt - prices[i]) / prices[i]
                 break
             elif p_future <= target_sl:
-                barrier_hit = -1 # Stop Loss Touclé
+                barrier_hit = -1
                 fut_ret = (target_sl - prices[i]) / prices[i]
                 break
                 
@@ -95,17 +92,9 @@ def apply_triple_barrier_and_features(df: pd.DataFrame, pt_mult=1.5, sl_mult=1.0
     
     return feat.dropna()
 
-all_dfs = []
-for t in CRYPTO_TICKERS:
-    try:
-        df_feat = apply_triple_barrier_and_features(data[t] if len(CRYPTO_TICKERS) > 1 else data)
-        all_dfs.append(df_feat)
-    except Exception as e:
-        print(f"Erreur extraction {t}: {e}")
+full_df = apply_triple_barrier_and_features(data)
 
-full_df = pd.concat(all_dfs).sort_index()
-
-# 4. Découpage Temporel Chronologique
+# 4. Découpage Temporel Chronologique (Train 70% / Val 15% / Test Holdout 15%)
 n_total = len(full_df)
 n_train = int(n_total * 0.70)
 n_val = int(n_total * 0.85)
@@ -129,13 +118,13 @@ ret_val = val_df["future_return"].values
 y_test = test_df["target_triple_barrier"].values
 ret_test = test_df["future_return"].values
 
-print(f"\n[2/5] ✂️ Découpage Haute Densité N = {n_total:,} échantillons :")
-print(f"  • Train Set (70%)     : {len(X_train_norm):,} échantillons (N_train > 50,000)")
+print(f"\n[2/5] ✂️ Découpage Spécialiste {SINGLE_TICKER} N = {n_total:,} échantillons :")
+print(f"  • Train Set (70%)     : {len(X_train_norm):,} échantillons")
 print(f"  • Validation Set (15%): {len(X_val_norm):,} échantillons")
 print(f"  • Test Holdout (15%)  : {len(X_test_norm):,} échantillons")
 
 train_dataset = TensorDataset(torch.tensor(X_train_norm.values, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
-train_loader = DataLoader(train_dataset, batch_size=512, shuffle=True)
+train_loader = DataLoader(train_dataset, batch_size=256, shuffle=True)
 
 X_val_tensor = torch.tensor(X_val_norm.values, dtype=torch.float32)
 X_test_tensor = torch.tensor(X_test_norm.values, dtype=torch.float32)
@@ -155,15 +144,13 @@ class ResidualTransformerBlock(nn.Module):
         self.dropout = nn.Dropout(0.15)
 
     def forward(self, x):
-        # Skip Connection 1 (ResNet Principle)
         h, _ = self.attn(x, x, x)
         x = self.norm1(x + self.dropout(h))
-        # Skip Connection 2
         f = self.ffn(x)
         x = self.norm2(x + self.dropout(f))
         return x
 
-class Ultimate10MDeepResidualTransformer(nn.Module):
+class SingleAsset10MDeepResidualTransformer(nn.Module):
     def __init__(self, input_dim, embed_dim=1024, n_blocks=3, n_heads=8):
         super().__init__()
         self.input_proj = nn.Linear(input_dim, embed_dim)
@@ -184,21 +171,20 @@ class Ultimate10MDeepResidualTransformer(nn.Module):
             h = block(h)
         return self.head(h.squeeze(1)).squeeze(-1)
 
-model = Ultimate10MDeepResidualTransformer(len(feature_cols))
+model = SingleAsset10MDeepResidualTransformer(len(feature_cols))
 num_params = sum(p.numel() for p in model.parameters())
-print(f"\n[3/5] 🧠 Architecture Résiduelle Sur-Paramétrée : {num_params:,} Paramètres (10M Model)")
+print(f"\n[3/5] 🧠 Transformer Résiduel Spécialiste {SINGLE_TICKER} : {num_params:,} Paramètres")
 
 criterion = nn.BCELoss()
 optimizer = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=5e-4)
 
 EPOCHS = 10000
-# Cosine Decay Continu sans Warm Restarts perturbateurs
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-6)
 evaluator = CryptoCustomUtilityMetric(target_profit_pct=3.0, stop_loss_pct=1.5)
 
 best_caum_score = -999.0
 best_epoch_num = 0
-checkpoint_path = "models/ultimate_double_descent_10m.pt"
+checkpoint_path = f"models/single_asset_{SINGLE_TICKER}_double_descent_10m.pt"
 os.makedirs("models", exist_ok=True)
 
 print(f"\n[4/5] 🚀 ENTRAÎNEMENT CONTINU SUR 10,000 EPOCHS (COSINE DECAY SIMPLE)...")
@@ -244,10 +230,10 @@ for epoch in range(1, EPOCHS + 1):
         print(f"Epoch {epoch:<5}/{EPOCHS} | Loss: {train_loss:.4f}  | Acc: {val_acc:5.1f}%  | WinRate: {val_wr:5.1f}% | CAUM: {val_caum:7.2f}     | LR: {current_lr:.1e} | {regime} {status}")
 
 print("-" * 110)
-print(f"  🏆 LE MEILLEUR MODÈLE EN DOUBLE DESCENTE A ÉTÉ OBTENU À L'EPOCH #{best_epoch_num} (Score CAUM: {best_caum_score:.2f})")
+print(f"  🏆 LE MEILLEUR MODÈLE EN DOUBLE DESCENTE SUR {SINGLE_TICKER} A ÉTÉ OBTENU À L'EPOCH #{best_epoch_num} (Score CAUM: {best_caum_score:.2f})")
 
 # 5. Évaluation Finale sur Test Holdout NON-VU avec le modèle retenu
-print("\n[5/5] 🧪 ÉVALUATION DU MEILLEUR MODÈLE 10M SUR LE JEU DE TEST HOLDOUT...")
+print(f"\n[5/5] 🧪 ÉVALUATION DU MEILLEUR MODÈLE SPÉCIALISTE {SINGLE_TICKER} SUR LE JEU DE TEST HOLDOUT...")
 model.load_state_dict(torch.load(checkpoint_path))
 model.eval()
 
@@ -261,8 +247,9 @@ test_prec = precision_score(y_test, test_preds, zero_division=0)
 test_metrics = evaluator.compute_asymmetric_utility(test_probs, ret_test)
 
 print("\n" + "=" * 95)
-print(f" 🏆 RÉSULTATS DU MODÈLE ULTIME DOUBLE DESCENT 10M (ISSU DE L'EPOCH #{best_epoch_num} SUR {EPOCHS})")
+print(f" 🏆 RÉSULTATS DU MODÈLE ULTIME DEEP DESCENT 10M SPÉCIALISTE {SINGLE_TICKER} (EPOCH #{best_epoch_num} / {EPOCHS})")
 print("=" * 95)
+print(f"  • Actif Spécialiste            : {SINGLE_TICKER} (Bitcoin)")
 print(f"  • Epoch Optimale Retenue       : Epoch #{best_epoch_num} / {EPOCHS}")
 print(f"  • Score CAUM de Validation      : {best_caum_score:.2f}")
 print(f"  • Précision Globale (Accuracy)   : {test_acc*100:.2f}%")
