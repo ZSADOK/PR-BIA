@@ -30,8 +30,10 @@ print("=" * 100)
 
 # 1. Dataset Spécialiste Unique Haute Densité Intraday (BTC-USD)
 SINGLE_TICKER = "BTC-USD"
-print(f"\n[1/5] 📈 Téléchargement du Dataset Spécialiste Unique Intraday ({SINGLE_TICKER})...")
-data = yf.download(SINGLE_TICKER, period="730d", interval="1h", progress=False)
+print(f"\n[1/5] 📈 Téléchargement du Dataset Multi-Résolution Haute Densité ({SINGLE_TICKER})...")
+df_1h = yf.download(SINGLE_TICKER, period="730d", interval="1h", progress=False)
+df_15m = yf.download(SINGLE_TICKER, period="60d", interval="15m", progress=False)
+df_5m = yf.download(SINGLE_TICKER, period="60d", interval="5m", progress=False)
 
 def apply_triple_barrier_and_features(df: pd.DataFrame, pt_mult=1.5, sl_mult=1.0, max_holding=12) -> pd.DataFrame:
     close_series = df["Close"].iloc[:, 0] if isinstance(df["Close"], pd.DataFrame) else df["Close"]
@@ -99,7 +101,13 @@ def apply_triple_barrier_and_features(df: pd.DataFrame, pt_mult=1.5, sl_mult=1.0
     
     return feat.dropna()
 
-full_df = apply_triple_barrier_and_features(data)
+dfs = []
+for frame in [df_1h, df_15m, df_5m]:
+    try:
+        dfs.append(apply_triple_barrier_and_features(frame))
+    except Exception:
+        pass
+full_df = pd.concat(dfs).sort_index()
 
 # 4. Découpage Temporel Chronologique (Train 70% / Val 15% / Test Holdout 15%)
 n_total = len(full_df)
