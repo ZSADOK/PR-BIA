@@ -97,10 +97,12 @@ patience_counter = 0
 os.makedirs("models", exist_ok=True)
 checkpoint_path = "models/timesfm_btc_best.pt"
 
-console.print(f"\n[bold green][3/4] 🏋️ DÉMARRAGE DE L'ENTRAÎNEMENT AVEC EARLY STOPPING...[/bold green]")
-console.print("-" * 85)
-console.print(f"{'Epoch':<10} | {'Train RMSE (%)':<20} | {'Val RMSE (%)':<20} | Statut")
-console.print("-" * 85)
+evaluator = CryptoCustomUtilityMetric(target_profit_pct=3.0, stop_loss_pct=1.5)
+
+console.print(f"\n[bold green][3/4] 🏋️ DÉMARRAGE DE L'ENTRAÎNEMENT AVEC EARLY STOPPING (RMSE % & CAUM SCORE)...[/bold green]")
+console.print("-" * 100)
+console.print(f"{'Epoch':<10} | {'Train RMSE (%)':<18} | {'Val RMSE (%)':<18} | {'Val CAUM Score':<18} | Statut")
+console.print("-" * 100)
 
 for epoch in range(1, EPOCHS + 1):
     model.train()
@@ -120,8 +122,16 @@ for epoch in range(1, EPOCHS + 1):
     with torch.no_grad():
         val_preds = model(X_val_tensor)
         val_loss = criterion(val_preds, y_val_tensor).item()
+        
+        # Inférence de trajectoire pour CAUM
+        cum_preds = torch.cumsum(val_preds, dim=1)[:, -1].numpy()
+        probs_caum = 1.0 / (1.0 + np.exp(-100.0 * cum_preds))
+        actual_cum = torch.cumsum(y_val_tensor, dim=1)[:, -1].numpy()
 
     val_rmse_pct = np.sqrt(max(1e-8, val_loss)) * 100.0
+    val_caum_metrics = evaluator.compute_asymmetric_utility(probs_caum, actual_cum)
+    val_caum_score = val_caum_metrics["crypto_utility_score"]
+
     scheduler.step(val_loss)
 
     status = ""
@@ -134,9 +144,9 @@ for epoch in range(1, EPOCHS + 1):
         patience_counter += 1
 
     if epoch % 5 == 0 or status != "":
-        console.print(f"Epoch {epoch:<5}/{EPOCHS} | RMSE: {train_rmse_pct:6.3f}% / h     | Val RMSE: {val_rmse_pct:6.3f}% / h     | [bold green]{status}[/bold green]")
+        console.print(f"Epoch {epoch:<5}/{EPOCHS} | RMSE: {train_rmse_pct:6.3f}% / h     | Val RMSE: {val_rmse_pct:6.3f}% / h     | CAUM: {val_caum_score:8.2f}         | [bold green]{status}[/bold green]")
 
 best_rmse_pct = np.sqrt(max(1e-8, best_val_loss)) * 100.0
-console.print("-" * 85)
+console.print("-" * 100)
 console.print(f"[bold green] 🏆 MEILLEUR CHECKPOINT TIMESFM OPTIMISÉ (Val RMSE: {best_rmse_pct:.3f}% / h)[/bold green]")
 console.print(f" 💾 Modèle sauvegardé dans : [bold cyan]{checkpoint_path}[/bold cyan]\n")
