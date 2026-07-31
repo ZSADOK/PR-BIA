@@ -343,7 +343,7 @@ def main():
     parser.add_argument("--eval_only", action="store_true", help="Évaluer directement le fichier de poids sans ré-entraîner")
     parser.add_argument("--test_ratio", type=float, default=0.25, help="Proportion de l'ensemble de données dédiée au jeu de test non-vu (défaut: 0.25 = 25%)")
     parser.add_argument("--period", type=str, default="60d", help="Période historique (ex: 60d pour 5m, 730d pour 1h)")
-    parser.add_argument("--interval", type=str, default="5m", choices=["5m", "15m", "1h", "1d"], help="Fréquence temporelle des bougies (défaut: 5m)")
+    parser.add_argument("--interval", type=str, default="1m", choices=["1m", "5m", "15m", "1h", "1d"], help="Fréquence temporelle des bougies (défaut: 1m)")
     args = parser.parse_args()
 
     ticker_list = [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
