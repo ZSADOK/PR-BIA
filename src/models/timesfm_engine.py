@@ -2,7 +2,7 @@
 Module de Modélisation et Prédiction avec Google TimesFM (Zero-Shot & Fine-Tuned).
 Convertit les séries temporelles brutes OHLCV de 5m en prédiction de prix continue
 et génère un signal binaire de trading (1 = Achat/Long, 0 = Neutre/Vente/Short).
-Charge obligatoirement les poids fine-tunés depuis models/timesfm_eth_finetuned.pt dès qu'ils existent.
+Securisé contre tout risque de segmentation fault sur macOS CPU/GPU.
 """
 import os
 import numpy as np
@@ -16,6 +16,8 @@ try:
     import torch
     import torch.nn as nn
     HAS_TORCH = True
+    # Empêche les conflits de threads OpenMP / C++ sur macOS
+    torch.set_num_threads(1)
 except ImportError:
     HAS_TORCH = False
 
@@ -49,17 +51,13 @@ class TimesFMEngine:
         self._init_model()
 
     def _init_model(self):
-        """Initialise le modèle et charge prioritairement les poids Fine-Tuned Colab s'ils existent."""
-        # 1. SI UN FICHIER DE POIDS FINE-TUNED EXISTE, LE CHARGER DIRECTEMENT
+        """Initialise le modèle et charge prioritairement les poids Fine-Tuned s'ils existent."""
         if HAS_TORCH and os.path.exists(FINETUNED_PATH):
             try:
                 logger.info(f"🔥 CHARGEMENT DU MODÈLE FINE-TUNÉ : {FINETUNED_PATH}")
                 self.model = PyTorchTimesFMModel(context_len=self.context_len)
-                state_dict = torch.load(FINETUNED_PATH, map_location=self.backend)
+                state_dict = torch.load(FINETUNED_PATH, map_location="cpu")
                 self.model.load_state_dict(state_dict, strict=False)
-                
-                if self.backend == "cuda" and torch.cuda.is_available():
-                    self.model.to("cuda")
                 self.model.eval()
                 self.is_finetuned = True
                 logger.info("✅ Poids du modèle TimesFM Fine-Tuné chargés avec succès !")
@@ -67,32 +65,10 @@ class TimesFMEngine:
             except Exception as e_ft:
                 logger.error(f"Erreur chargement poids fine-tunés: {e_ft}")
 
-        # 2. Sinon, tentative d'importation native TimesFM
-        try:
-            import timesfm
-            TimesFmClass = getattr(timesfm, 'TimesFm', getattr(timesfm, 'TimesFM', None))
-            if TimesFmClass is not None:
-                logger.info("Chargement du modèle de fondation Google TimesFM (Zero-Shot)...")
-                self.model = TimesFmClass(
-                    context_len=self.context_len,
-                    horizon_len=self.horizon_len,
-                    input_patch_len=32,
-                    output_patch_len=128,
-                    num_layers=20,
-                    model_dims=1280,
-                    backend=self.backend
-                )
-                self.model.load_from_checkpoint(repo_id="google/timesfm-1.0-200m")
-                return
-        except Exception:
-            pass
-
-        # 3. Fallback PyTorch Transformer Engine par défaut
+        # Fallback PyTorch Transformer Engine par défaut
         if HAS_TORCH:
             logger.info("Initialisation du PyTorch Time-Series Transformer Engine...")
             self.model = PyTorchTimesFMModel(context_len=self.context_len)
-            if self.backend == "cuda" and torch.cuda.is_available():
-                self.model.to("cuda")
             self.model.eval()
 
     def predict_next_price(self, close_series: pd.Series) -> float:
@@ -102,33 +78,26 @@ class TimesFMEngine:
         
         context_data = close_series.iloc[-self.context_len:].values.astype(np.float32)
         
-        if self.model is not None:
+        if self.model is not None and HAS_TORCH and isinstance(self.model, PyTorchTimesFMModel):
             try:
-                if isinstance(self.model, PyTorchTimesFMModel) and HAS_TORCH:
-                    mean = np.mean(context_data)
-                    std = np.std(context_data) + 1e-8
-                    norm_ctx = (context_data - mean) / std
+                mean = float(np.mean(context_data))
+                std = float(np.std(context_data)) + 1e-8
+                norm_ctx = (context_data - mean) / std
+                
+                tensor_ctx = torch.tensor(norm_ctx, dtype=torch.float32).unsqueeze(0)
+                
+                with torch.no_grad():
+                    norm_pred = float(self.model(tensor_ctx).detach().cpu().item())
                     
-                    tensor_ctx = torch.tensor(norm_ctx, dtype=torch.float32).unsqueeze(0)
-                    if self.backend == "cuda" and torch.cuda.is_available():
-                        tensor_ctx = tensor_ctx.to("cuda")
-                        
-                    with torch.no_grad():
-                        norm_pred = self.model(tensor_ctx).item()
-                        
-                    pred_price = (norm_pred * std) + mean
-                    return float(pred_price)
-                elif hasattr(self.model, 'forecast'):
-                    forecast_input = [context_data]
-                    forecast_results, _ = self.model.forecast(forecast_input, freq=[0])
-                    return float(forecast_results[0][0])
+                pred_price = (norm_pred * std) + mean
+                return float(pred_price)
             except Exception as ex:
-                logger.error(f"Erreur lors de l'inférence: {ex}.")
+                logger.error(f"Erreur lors de l'inférence PyTorch: {ex}.")
 
-        # Fallback statistique
+        # Fallback statistique sécurisé
         recent_changes = np.diff(context_data[-10:])
         weights = np.exp(np.linspace(-1, 0, len(recent_changes)))
-        weighted_delta = np.average(recent_changes, weights=weights)
+        weighted_delta = float(np.average(recent_changes, weights=weights))
         
         last_price = float(context_data[-1])
         return float(last_price + weighted_delta)
