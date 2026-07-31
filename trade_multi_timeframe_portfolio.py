@@ -215,6 +215,39 @@ def update_tf_history(tf: str, current_price: float, confidence: float, action: 
 
     save_tf_history(cfg["history_file"], history)
 
+# État global partagé du compte Alpaca pour la UI (mis à jour en arrière-plan)
+ACCOUNT_STATE = {
+    "equity": 100000.0,
+    "cash": 100000.0,
+    "pnl": 0.0,
+    "pnl_pct": 0.0,
+    "latest_price": 0.0,
+    "var_5m_pct": 0.0,
+    "var_1h_pct": 0.0
+}
+
+def account_updater_worker():
+    """
+    Thread d'arrière-plan dédié pour la mise à jour sans blocage du compte Alpaca et des prix.
+    """
+    while True:
+        try:
+            account = trading_client.get_account()
+            eq = float(account.equity)
+            cs = float(account.cash)
+            pnl_val = eq - 100000.0
+            pnl_p = (pnl_val / 100000.0) * 100.0
+
+            with STATE_LOCK:
+                ACCOUNT_STATE["equity"] = eq
+                ACCOUNT_STATE["cash"] = cs
+                ACCOUNT_STATE["pnl"] = pnl_val
+                ACCOUNT_STATE["pnl_pct"] = pnl_p
+        except Exception:
+            pass
+
+        time.sleep(5.0)
+
 def timeframe_worker(tf: str):
     """
     Worker indépendant par horizon temporel (1h, 5m, 1m).
@@ -225,16 +258,13 @@ def timeframe_worker(tf: str):
     while True:
         start_t = time.time()
         try:
-            # 1. Obtenir les données Alpaca & Cash disponible
-            try:
-                account = trading_client.get_account()
-                total_cash = float(account.cash)
-            except Exception:
-                total_cash = 100000.0
+            # 1. Obtenir le Cash disponible
+            with STATE_LOCK:
+                total_cash = ACCOUNT_STATE["cash"]
 
             max_tf_budget = total_cash * cfg["budget_pct"]
 
-            # 2. Téléchargement des bougies avec fallback de sécurité
+            # 2. Téléchargement rapide des bougies avec fallback de sécurité
             raw_data = yf.download(SINGLE_TICKER, period=cfg["period"], interval=cfg["interval"], progress=False)
             if raw_data.empty or len(raw_data) < 10:
                 raw_data = yf.download(SINGLE_TICKER, period="5d", interval=cfg["interval"], progress=False)
@@ -268,9 +298,10 @@ def timeframe_worker(tf: str):
             except Exception:
                 has_open_pos = False
 
-            # 3. Inférence PyTorch
+            # 3. Inférence PyTorch ultra-rapide sur tail(1000)
             if is_trained and model is not None:
-                feat_df = apply_triple_barrier_and_features(raw_data, apply_prescreen=False, interval=cfg["interval"])
+                fast_data = raw_data.tail(1000)
+                feat_df = apply_triple_barrier_and_features(fast_data, apply_prescreen=False, interval=cfg["interval"])
                 if not feat_df.empty:
                     last_feat = feat_df[feature_cols].iloc[-1:]
                     mean = feat_df[feature_cols].mean()
@@ -350,40 +381,23 @@ def render_multi_tf_dashboard():
         Layout(name="footer", size=3)
     )
 
-    # 1. Compte Alpaca & Prix Temps Réel BTC
-    try:
-        account = trading_client.get_account()
-        total_equity = float(account.equity)
-        cash = float(account.cash)
-        pnl = total_equity - 100000.0
-        pnl_pct = (pnl / 100000.0) * 100.0
-    except Exception:
-        total_equity, cash, pnl, pnl_pct = 100000.0, 100000.0, 0.0, 0.0
-
-    # Récupérer les données de prix récentes pour les variations 5m et 1h
-    latest_price = 0.0
-    var_5m_pct = 0.0
-    var_1h_pct = 0.0
+    # 1. État du compte en mémoire (0ms, aucun appel réseau dans le rendu UI)
     with STATE_LOCK:
-        if LIVE_STATES["5m"]["price"] > 0:
-            latest_price = LIVE_STATES["5m"]["price"]
-        elif LIVE_STATES["1m"]["price"] > 0:
+        total_equity = ACCOUNT_STATE["equity"]
+        cash = ACCOUNT_STATE["cash"]
+        pnl = ACCOUNT_STATE["pnl"]
+        pnl_pct = ACCOUNT_STATE["pnl_pct"]
+
+        latest_price = 0.0
+        if LIVE_STATES["1m"]["price"] > 0:
             latest_price = LIVE_STATES["1m"]["price"]
+        elif LIVE_STATES["5m"]["price"] > 0:
+            latest_price = LIVE_STATES["5m"]["price"]
         elif LIVE_STATES["1h"]["price"] > 0:
             latest_price = LIVE_STATES["1h"]["price"]
 
-    if latest_price == 0.0:
-        try:
-            raw_sample = yf.download(SINGLE_TICKER, period="5d", interval="5m", progress=False)
-            c_series = raw_sample["Close"].iloc[:, 0] if isinstance(raw_sample["Close"], pd.DataFrame) else raw_sample["Close"]
-            c_vals = c_series.dropna().values.flatten()
-            latest_price = c_vals[-1]
-            p5m = c_vals[-2] if len(c_vals) >= 2 else latest_price
-            p1h = c_vals[-13] if len(c_vals) >= 13 else c_vals[0]
-            var_5m_pct = ((latest_price - p5m) / p5m) * 100.0
-            var_1h_pct = ((latest_price - p1h) / p1h) * 100.0
-        except Exception:
-            latest_price = 0.0
+        var_5m_pct = LIVE_STATES["5m"]["price_change_pct"]
+        var_1h_pct = LIVE_STATES["1h"]["price_change_pct"]
 
     style_5m = "green" if var_5m_pct >= 0 else "red"
     style_1h = "green" if var_1h_pct >= 0 else "red"
@@ -533,6 +547,10 @@ def main():
                 except Exception:
                     pass
         console.print("[bold green]✔ Historiques effacés. Démarrage vierge et synchronisé des 3 horizons![/bold green]\n")
+
+    # Lancer le worker d'actualisation de compte Alpaca sans blocage
+    t_acc = threading.Thread(target=account_updater_worker, daemon=True)
+    t_acc.start()
 
     # Lancer les 3 workers indépendants dans des threads d'arrière-plan (échelonnés de 1s)
     for tf in TIMEFRAME_CONFIGS.keys():
