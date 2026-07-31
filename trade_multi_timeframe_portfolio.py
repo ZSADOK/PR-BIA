@@ -485,11 +485,28 @@ def render_multi_tf_dashboard():
 def main():
     parser = argparse.ArgumentParser(description="Bot Multi-Horizon Temporel Ensemble SOTA (BTC-USD)")
     parser.add_argument("--sell_all", action="store_true", help="Fermer immédiatement toutes les positions")
+    parser.add_argument("--reset", "-r", action="store_true", help="Réinitialiser et effacer tout l'historique avant de démarrer")
     args = parser.parse_args()
 
     if args.sell_all:
         execute_sell_all()
         return
+
+    if args.reset:
+        console.print("[yellow]🧹 Option --reset détectée: Réinitialisation complète des fichiers d'historique...[/yellow]")
+        for tf, cfg in TIMEFRAME_CONFIGS.items():
+            if os.path.exists(cfg["history_file"]):
+                try:
+                    os.remove(cfg["history_file"])
+                except Exception:
+                    pass
+        for extra_f in ["data/btc_hourly_trades_history.json", "data/bot_persistent_state.json"]:
+            if os.path.exists(extra_f):
+                try:
+                    os.remove(extra_f)
+                except Exception:
+                    pass
+        console.print("[bold green]✔ Historiques effacés. Démarrage vierge et synchronisé des 3 horizons![/bold green]\n")
 
     # Lancer les 3 workers indépendants dans des threads d'arrière-plan (échelonnés de 1s)
     for tf in TIMEFRAME_CONFIGS.keys():
