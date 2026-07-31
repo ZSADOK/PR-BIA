@@ -6,15 +6,30 @@ Unifie :
 - Inférence IA TimesFM (5m H+1 forecast)
 - Méta-Filtre XGBoost Triple Barrière (Win Rate > 75%)
 - Dynamic Kelly Allocation & Envelope Safety (Risk Manager)
-- Exécution automatique des ordres sur Alpaca Paper Trading
+- Exécution automatique des ordres sur Alpaca Paper Trading ($100k Cash)
 """
 import os
 import sys
+
+# Neutralisation OpenMP C++ macOS
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+
+# Auto-bootstrap vers l'interpréteur .venv
+base_dir = os.path.dirname(os.path.abspath(__file__))
+venv_python = os.path.join(base_dir, ".venv", "bin", "python3")
+if os.path.exists(venv_python) and os.path.abspath(sys.executable) != os.path.abspath(venv_python):
+    os.execv(venv_python, [venv_python] + sys.argv)
+
 import logging
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
+
+sys.path.append(base_dir)
 
 from config.settings import config
 from src.data_loader import get_large_eth_data
@@ -40,7 +55,7 @@ def run_trading_cycle(capital: float = 100000.0) -> dict:
         return {"status": "error", "message": "Données insuffisantes"}
 
     current_price = float(df['Close'].iloc[-1])
-    logger.info(f"Dernier prix ETH (5m) : {current_price:.2f} $ ({len(df)} bougies 5m en mémoire)")
+    logger.info(f"Dernier prix ETH (5m) : ${current_price:,.2f} ({len(df)} bougies 5m en mémoire)")
     
     # 2. Pré-Screening (RVOL > 1.2, SMA 50/200, RSI 50-72)
     logger.info("2. Calcul du Pré-Screening Volume & Momentum 5m...")
@@ -49,11 +64,11 @@ def run_trading_cycle(capital: float = 100000.0) -> dict:
     latest_screen = screener.evaluate_latest(df_screened)
     logger.info(f"Résultat Screener : RVOL={latest_screen['rvol']:.2f}, Trend_OK={latest_screen['trend_ok']}, Passed={latest_screen['passed']}")
     
-    # 3. Prédiction Zero-Shot TimesFM (5m H+1)
+    # 3. Prédiction Zero-Shot / Fine-Tuned TimesFM (5m H+1)
     logger.info("3. Inférence du modèle TimesFM (5m H+1)...")
     engine = TimesFMEngine(context_len=config.context_len, horizon_len=config.horizon_len, backend=config.backend)
     signal = engine.generate_signal(df_screened, screener_passed=latest_screen['passed'])
-    logger.info(f"Prédiction TimesFM Prix H+1 (5m) : {signal['predicted_price']:.2f} $ (Variation: {signal['predicted_return_pct']:+.4f}%)")
+    logger.info(f"Prédiction TimesFM Prix H+1 (5m) : ${signal['predicted_price']:,.2f} (Variation: {signal['predicted_return_pct']:+.4f}%)")
     
     # 3.5 ÉVALUATION DU MÉTA-LABELER XGBOOST (Triple Barrière)
     logger.info("3.5 Évaluation par le Méta-Filtre XGBoost...")
@@ -85,9 +100,9 @@ def run_trading_cycle(capital: float = 100000.0) -> dict:
         historical_win_rate=max(0.60, meta_confidence)
     )
     
-    logger.info(f"Position Sizing : Capital Alloué = {position_info['capital_allocated']:.2f} $ | Units = {position_info['quantity_units']:.4f} ETH")
+    logger.info(f"Position Sizing : Capital Alloué = ${position_info['capital_allocated']:,.2f} | Units = {position_info['quantity_units']:.4f} ETH")
     
-    # 5. Exécution Automatisée sur Alpaca ou CCXT
+    # 5. Exécution Automatisée sur Alpaca Paper Trading
     logger.info(f"5. Exécution automatique via {config.exchange_id.upper()} Executor...")
     if config.exchange_id == "alpaca":
         executor = AlpacaExecutor()
@@ -119,5 +134,6 @@ def run_trading_cycle(capital: float = 100000.0) -> dict:
 
 if __name__ == "__main__":
     res = run_trading_cycle()
-    print("\n=== FIN DU CYCLE ETH 5M ALPACA ===")
-    print(res)
+    print("\n" + "="*88)
+    print("=== FIN DU CYCLE DE TRADING ETH 5M ALPACA ===")
+    print("="*88)
