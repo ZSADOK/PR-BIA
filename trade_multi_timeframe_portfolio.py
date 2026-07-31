@@ -72,6 +72,20 @@ TIMEFRAME_CONFIGS = {
     }
 }
 
+def make_sparkline(vals, length=8):
+    if len(vals) < 2:
+        return "---"
+    sub_vals = vals[-length:]
+    min_v, max_v = min(sub_vals), max(sub_vals)
+    if max_v == min_v:
+        return "▅" * len(sub_vals)
+    bars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    res = ""
+    for v in sub_vals:
+        idx = int(((v - min_v) / (max_v - min_v)) * 7)
+        res += bars[max(0, min(7, idx))]
+    return res
+
 # État global partagé entre les threads d'exécution
 LIVE_STATES = {
     tf: {
@@ -81,7 +95,9 @@ LIVE_STATES = {
         "allocated_notional": 0.0,
         "last_update": "Attente...",
         "next_countdown": cfg["interval_sec"],
-        "price": 0.0
+        "price": 0.0,
+        "price_change_pct": 0.0,
+        "sparkline": "---"
     }
     for tf, cfg in TIMEFRAME_CONFIGS.items()
 }
@@ -268,10 +284,15 @@ def timeframe_worker(tf: str):
                         action = "HOLD"
                         signal_text = "[bold yellow]HOLD (100% CASH - IA NEUTRE)[/bold yellow]"
 
-            # 4. Mise à jour de l'historique
+            # 4. Calcul de l'évolution du prix et graphique sparkline
+            prev_p = close_vals[-2] if len(close_vals) >= 2 else current_price
+            price_chg_pct = ((current_price - prev_p) / prev_p) * 100.0
+            sparkline_str = make_sparkline(close_vals, length=10)
+
+            # 5. Mise à jour de l'historique
             update_tf_history(tf, current_price, confidence, action)
 
-            # 5. Mise à jour de l'état partagé pour la UI Rich
+            # 6. Mise à jour de l'état partagé pour la UI Rich
             with STATE_LOCK:
                 LIVE_STATES[tf]["confidence"] = confidence
                 LIVE_STATES[tf]["action"] = action
@@ -279,6 +300,8 @@ def timeframe_worker(tf: str):
                 LIVE_STATES[tf]["allocated_notional"] = allocated_notional
                 LIVE_STATES[tf]["last_update"] = datetime.now().strftime("%H:%M:%S")
                 LIVE_STATES[tf]["price"] = current_price
+                LIVE_STATES[tf]["price_change_pct"] = price_chg_pct
+                LIVE_STATES[tf]["sparkline"] = sparkline_str
 
         except Exception as e:
             with STATE_LOCK:
@@ -352,9 +375,12 @@ def render_multi_tf_dashboard():
 
     # 2. Table Synthèse des 3 Horizons Temporels
     table = Table(title="📊 PORTFEUILLE ENSEMBLE MULTI-HORIZON (1H: 30% | 5M: 20% | 1M: 10% | CASH SAFETY: 40%)", expand=True)
-    table.add_column("Horizon Temporel", style="cyan", justify="left")
-    table.add_column("Part Cash Max", style="bold yellow", justify="center")
-    table.add_column("Plafond Budget ($)", style="bold white", justify="right")
+    table.add_column("Horizon", style="cyan", justify="left")
+    table.add_column("Prix BTC", style="bold white", justify="right")
+    table.add_column("Variation", style="bold white", justify="center")
+    table.add_column("Tendance Sparkline", style="bold yellow", justify="center")
+    table.add_column("Part Cash", style="bold yellow", justify="center")
+    table.add_column("Plafond ($)", style="bold white", justify="right")
     table.add_column("Confiance IA", style="bold cyan", justify="right")
     table.add_column("Signal SOTA", style="bold white", justify="center")
     table.add_column("Allocation Kelly ($)", style="bold green", justify="right")
@@ -364,6 +390,11 @@ def render_multi_tf_dashboard():
         for tf, cfg in TIMEFRAME_CONFIGS.items():
             st = LIVE_STATES[tf]
             max_b = cash * cfg["budget_pct"]
+            price_str = f"${st['price']:,.2f}" if st['price'] > 0 else "---"
+            var_pct = st["price_change_pct"]
+            var_style = "bold green" if var_pct >= 0 else "bold red"
+            var_str = f"[{var_style}]{var_pct:+.2f}%[/{var_style}]" if st['price'] > 0 else "---"
+            spark_str = f"[cyan]{st['sparkline']}[/cyan]"
             conf_str = f"{st['confidence']:.1f}%"
             sig_str = st["signal_text"]
             notional_str = f"${st['allocated_notional']:,.2f}" if st['allocated_notional'] > 0 else "0.00$ (CASH)"
@@ -371,6 +402,9 @@ def render_multi_tf_dashboard():
             
             table.add_row(
                 cfg["name"],
+                price_str,
+                var_str,
+                spark_str,
                 f"{cfg['budget_pct']*100:.0f}%",
                 f"${max_b:,.2f}",
                 conf_str,
