@@ -41,14 +41,17 @@ def execute_trade_signals(results, threshold: float = 0.58, notional: float = 10
     """
     Exécution automatique des signaux d'achat filtrés par le Risk Manager.
     """
-    top_candidates = [r for r in results if r["Confiance"] >= threshold and not r["HasPos"]]
+    top_candidates = [
+        r for r in results 
+        if float(r.get("confidence", r.get("Confiance", 0.0))) >= threshold and not r.get("HasPos", False)
+    ]
     if not top_candidates:
         return
 
     for target_asset in top_candidates:
-        target_name = target_asset["Nom"]
-        target_symbol = target_asset["Ticker"]
-        target_prob = target_asset["Confiance"]
+        target_name = target_asset.get("Nom", target_asset.get("ticker", "BTC-USD"))
+        target_symbol = target_asset.get("Ticker", target_asset.get("ticker", "BTC-USD"))
+        target_prob = float(target_asset.get("confidence", target_asset.get("Confiance", 0.50)))
         target_alpaca = map_symbol_to_alpaca(target_symbol)
 
         try:
