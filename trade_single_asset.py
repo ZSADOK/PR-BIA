@@ -176,6 +176,15 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
     close_vals = close_series.dropna().values.flatten()
     current_price = close_vals[-1]
     
+    # Calcul des variations 5 min et 1h séparément
+    price_5m_ago = close_vals[-2] if len(close_vals) >= 2 else current_price
+    var_5m_pct = ((current_price - price_5m_ago) / price_5m_ago) * 100.0
+
+    # 12 bougies 5m = 1h (ou 1 bougie si interval == "1h")
+    h_lookback = 13 if current_interval == "5m" else 2
+    price_1h_ago = close_vals[-h_lookback] if len(close_vals) >= h_lookback else close_vals[0]
+    var_1h_pct = ((current_price - price_1h_ago) / price_1h_ago) * 100.0
+
     confidence = 50.0
     signal_text = "[bold yellow]HOLD (NEUTRE / CASH)[/bold yellow]"
     allocated_notional = 0.0
@@ -225,12 +234,17 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
                 signal_text = "[bold yellow]HOLD (100% CASH LIQUIDE - IA NEUTRE)[/bold yellow]"
 
     # Table Principale Statut
-    table = Table(title=f"📊 ÉTAT DU MODÈLE ET COMPTE ALPACA PAPER | STATUT: {'[green]OPTIMISÉ (CAUM 242.11)[/green]' if is_trained else '[yellow]NON ENTRENÉ[/yellow]'}", expand=True)
+    table = Table(title=f"📊 ÉTAT DU MODÈLE ET COMPTE ALPACA PAPER | STATUT: {'[green]OPTIMISÉ (CAUM 739.98 - 5m)[/green]' if is_trained else '[yellow]NON ENTRENÉ[/yellow]'}", expand=True)
     table.add_column("Métrique Financière", style="cyan", justify="left")
     table.add_column("Valeur Temps Réel", style="bold white", justify="right")
 
+    style_5m = "bold green" if var_5m_pct >= 0 else "bold red"
+    style_1h = "bold green" if var_1h_pct >= 0 else "bold red"
+
     table.add_row("Prix Actuel Bitcoin (BTC-USD)", f"${current_price:,.2f}")
-    table.add_row("Probabilité Inférence IA (1h)", f"{confidence:.1f}%")
+    table.add_row("Variation Bitcoin (5 min)", f"[{style_5m}]{var_5m_pct:+.2f}%[/{style_5m}]")
+    table.add_row("Variation Bitcoin (1 heure)", f"[{style_1h}]{var_1h_pct:+.2f}%[/{style_1h}]")
+    table.add_row(f"Probabilité Inférence IA ({current_interval})", f"{confidence:.1f}%")
     table.add_row("Signal de Décision SOTA", signal_text)
     table.add_row("Allocation Dynamique de Kelly", f"${allocated_notional:,.2f}" if allocated_notional > 0 else "[yellow]0.00$ (CASH)[/yellow]")
     table.add_row("Position Alpaca Paper", pos_str)
@@ -240,15 +254,15 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
 
     layout["main"].update(Panel(table, style="blue"))
 
-    # Table Journal de Suivi Horaire
+    # Table Journal de Suivi Dynamique
     history = load_history()
-    j_table = Table(title="📜 JOURNAL DE SUIVI DYNAMIQUE : VÉRIFICATION DES PRÉDICTIONS PAR HEURE", expand=True)
+    j_table = Table(title=f"📜 JOURNAL DE SUIVI DYNAMIQUE : VÉRIFICATION DES PRÉDICTIONS ({current_interval.upper()})", expand=True)
     j_table.add_column("Horodatage", style="dim", justify="left")
     j_table.add_column("Prix Entrée", style="white", justify="right")
     j_table.add_column("Confiance IA", style="cyan", justify="right")
     j_table.add_column("Action", style="bold white", justify="center")
-    j_table.add_column("Prix Clôture (+1h)", style="white", justify="right")
-    j_table.add_column("Variation 1h", style="bold white", justify="right")
+    j_table.add_column(f"Prix Clôture (+{current_interval})", style="white", justify="right")
+    j_table.add_column(f"Variation {current_interval}", style="bold white", justify="right")
     j_table.add_column("Résultat IA", style="bold yellow", justify="center")
 
     completed_wins = 0
@@ -274,7 +288,7 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
             out_style = "[bold red]❌ ERREUR[/bold red]"
             completed_total += 1
         else:
-            out_style = "[bold yellow]⌛ EN COURS (+1h)[/bold yellow]"
+            out_style = f"[bold yellow]⌛ EN COURS (+{current_interval})[/bold yellow]"
 
         j_table.add_row(t_str, f"${p_in:,.2f}", f"{conf:.1f}%", act, p_out_str, chg_str, out_style)
 
