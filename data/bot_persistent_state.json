@@ -11,8 +11,8 @@
   },
   "stop_loss_cooldown": {},
   "unsupported_assets": [
-    "NEAR/USD",
-    "NEARUSD"
+    "NEARUSD",
+    "NEAR/USD"
   ],
-  "last_updated": 1785488784.1937113
+  "last_updated": 1785490340.4594882
 }
