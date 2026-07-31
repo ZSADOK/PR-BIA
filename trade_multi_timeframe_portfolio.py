@@ -30,7 +30,7 @@ from rich.layout import Layout
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from src.trading_config import console, trading_client, map_symbol_to_alpaca
-from src.execution import check_instant_safety_limits, execute_sell_all, execute_trade_signals
+from src.execution import check_instant_safety_limits, execute_sell_all, execute_trade_signals, execute_sell_signal
 from scripts.train_tabfm_residual_multi_asset import MultiAssetResidualTransformer, apply_triple_barrier_and_features
 
 SINGLE_TICKER = "BTC-USD"
@@ -333,7 +333,8 @@ def timeframe_worker(tf: str):
                     elif prob_val <= 0.42:
                         action = "SELL"
                         if has_open_pos:
-                            signal_text = "[bold red]ORDRE VENTE[/bold red]"
+                            signal_text = "[bold red]VENDU SUR ALPACA[/bold red]"
+                            execute_sell_signal(SINGLE_TICKER)
                         else:
                             signal_text = "[bold yellow]CASH (BAISSIÈRE)[/bold yellow]"
                     else:

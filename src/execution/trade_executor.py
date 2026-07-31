@@ -124,3 +124,22 @@ def execute_trade_signals(results, threshold: float = 0.58, notional: float = 10
                 console.print(f"[bold yellow][WARN] {target_alpaca} n'est pas actif sur Alpaca Paper Trading. Ignoré.[/bold yellow]")
             else:
                 console.print(f"[red]Erreur lors de l'exécution d'achat sur {target_alpaca}: {e}[/red]")
+
+def execute_sell_signal(ticker: str = "BTC-USD"):
+    """
+    Exécution immédiate de vente / clôture de position sur Alpaca Paper Trading.
+    """
+    target_alpaca = map_symbol_to_alpaca(ticker)
+    target_clean = target_alpaca.replace("/", "").upper()
+
+    try:
+        positions = trading_client.get_all_positions()
+        for p in positions:
+            p_clean = p.symbol.replace("/", "").upper()
+            if p_clean == target_clean or p.symbol == target_alpaca:
+                trading_client.close_position(p.symbol)
+                console.print(f"[bold red][ORDER SELL] Vente immédiate exécutée sur {p.symbol} (Alpaca Paper Trading).[/bold red]")
+                return True
+    except Exception as e:
+        console.print(f"[red]Erreur lors de l'exécution de la vente sur {target_alpaca}: {e}[/red]")
+    return False
