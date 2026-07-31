@@ -14,6 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.data_loader import get_large_eth_data
 from src.models.meta_labeler import MetaLabeler, META_MODEL_PATH
+from src.models.timesfm_engine import TimesFMEngine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("MetaTrainer")
@@ -32,8 +33,8 @@ def train_meta_model(days_back: int = 60, output_path: str = META_MODEL_PATH):
 
     logger.info(f"=== ENTRAÎNEMENT DU MÉTA-MODÈLE XGBOOST ETH 5m ({days_back} JOURS) ===")
     
-    # 1. Ingestion des données 5m
-    df = get_large_eth_data(symbol="ETH/USDT", timeframe="5m", days_back=days_back, force_refresh=False)
+    # 1. Ingestion de 60 jours de bougies 5m réelles (~17 280 bougies)
+    df = get_large_eth_data(symbol="ETH/USDT", timeframe="5m", days_back=days_back, force_refresh=True)
     logger.info(f"Données brutes 5m : {len(df)} bougies de 5 minutes chargées.")
     
     # 2. Génération des Labels Triple Barrière (+1.2x ATR TP / -0.8x ATR SL)
@@ -41,12 +42,30 @@ def train_meta_model(days_back: int = 60, output_path: str = META_MODEL_PATH):
     logger.info("Génération des labels Triple Barrière (+1.2x ATR TP / -0.8x ATR SL)...")
     y_labels = meta_labeler.generate_triple_barrier_labels(df, pt_multiplier=1.2, sl_multiplier=0.8, max_holding_candles=12)
     
-    # 3. Features 5m
+    # 3. Features 5m + Inférence du Modèle TimesFM Fine-Tuné
+    engine = TimesFMEngine()
     X_features = meta_labeler.extract_features(df)
+    
+    # Injection du rendement prédit par le TimesFM Fine-Tuné dans les features
+    logger.info("Calcul des prédictions TimesFM Fine-Tuné sur le dataset 5m...")
+    timesfm_preds = []
+    window = 100
+    for i in range(len(df)):
+        if i < window:
+            timesfm_preds.append(0.0)
+        else:
+            sub_series = df['Close'].iloc[:i+1]
+            p_pred = engine.predict_next_price(sub_series)
+            p_curr = float(sub_series.iloc[-1])
+            timesfm_preds.append((p_pred - p_curr) / p_curr)
+            
+    X_features['timesfm_pred_ret'] = timesfm_preds
     
     valid_idx = X_features.dropna().index.intersection(y_labels.dropna().index)
     X = X_features.loc[valid_idx]
     y = y_labels.loc[valid_idx]
+    
+    logger.info(f"Dataset de Méta-Labeling avec TimesFM Fine-Tuné : {len(X)} échantillons. Class Balance: {y.mean()*100:.2f}% Positifs")
     
     # 4. Split Temporel Train (80%) / Test (20%)
     split_idx = int(len(X) * 0.80)
@@ -57,9 +76,9 @@ def train_meta_model(days_back: int = 60, output_path: str = META_MODEL_PATH):
     
     # 5. Entraînement XGBoost
     model = xgb.XGBClassifier(
-        n_estimators=200,
+        n_estimators=300,
         max_depth=5,
-        learning_rate=0.02,
+        learning_rate=0.015,
         subsample=0.85,
         colsample_bytree=0.85,
         scale_pos_weight=pos_weight,
@@ -69,14 +88,13 @@ def train_meta_model(days_back: int = 60, output_path: str = META_MODEL_PATH):
     
     model.fit(X_train, y_train)
     
-    # 6. Grille de Calibration du Seuil de Conviction pour Maximiser le Win Rate
+    # 6. Grille de Calibration du Seuil de Conviction
     test_probs = model.predict_proba(X_test)[:, 1]
     
     best_threshold = 0.50
     best_win_rate = 0.0
     best_trades_count = 0
     
-    logger.info("Calibration du Seuil de Conviction pour le Win Rate Max...")
     for thresh in np.arange(0.40, 0.85, 0.05):
         mask = test_probs >= thresh
         trades = y_test[mask]
