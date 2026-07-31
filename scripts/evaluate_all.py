@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """
 Script de Rapport et d'Évaluation Globale Tout-En-Un (Master Evaluation Suite).
-Vectorisation pure : 
-- TimesFM Seul = Signal directionnel brut (Prédiction > 0)
-- Combo TimesFM+XGB = Signal filtré par le Screener RVOL/Trend + Méta-Labeler XGBoost
+Évaluation complète Bi-Directionnelle (Long/Achat & Short/Vente) sur 100 points de test.
 """
 import os
 import sys
@@ -99,19 +97,19 @@ def run_master_evaluation(days_eval: int = 30):
     print("-" * 60 + "\n")
 
     # --------------------------------------------------------------------------
-    # SECTION 4 : ÉVALUATION COMPARATIVE VECTORISÉE SUR LE JEU DE TEST 5M
+    # SECTION 4 : ÉVALUATION COMPARATIVE SUR ÉCHANTILLON REPRÉSENTATIF 5M
     # --------------------------------------------------------------------------
     print("📊 SECTION 4 : ÉVALUATION SUR JEU DE TEST 5M (HORS-ÉCHANTILLON)")
     print("-" * 60)
     
-    test_start_idx = int(len(df) * 0.75)
+    test_start_idx = int(len(df) * 0.70)
     df_test = df.iloc[test_start_idx:].copy()
     
     screener = MomentumScreener(rvol_threshold=config.rvol_threshold)
     df_screened = screener.compute_indicators(df_test)
     features_df = meta_labeler.extract_features(df_screened)
     
-    # Échantillonnage de 100 fenêtres glissantes espacées sur le test set
+    # 100 fenêtres glissantes espacées sur le test set
     sample_indices = list(range(config.context_len, len(df_screened) - 1, max(1, (len(df_screened) - config.context_len) // 100)))[:100]
     
     windows = [df_screened['Close'].iloc[idx-config.context_len+1:idx+1].values for idx in sample_indices]
@@ -132,20 +130,20 @@ def run_master_evaluation(days_eval: int = 30):
     else:
         meta_probs = np.full(len(sample_indices), 0.50)
         
-    # TimesFM Seul = Prédiction directionnelle brute > 0
-    raw_binary = np.where(pred_returns > 0.0001, 1, 0)
+    # TimesFM Seul = Prédiction de Tendance (|Prédiction| > 0.0001)
+    tfm_long_short_binary = np.where(np.abs(pred_returns) > 0.0001, 1, 0)
     
-    # Combo = TimesFM + Screener RVOL + XGBoost Meta-Labeler (> 0.50)
-    meta_passed = meta_probs >= 0.50
-    ens_binary = np.where((raw_binary == 1) & (screener_passes) & (meta_passed), 1, 0)
+    # Gain du trade : si Long (pred > 0) -> actual_return ; si Short (pred < 0) -> -actual_return
+    trade_returns = np.where(pred_returns > 0, actual_returns, -actual_returns)
     
-    # Si le combo n'a pas de trades avec le filtre screener strict sur l'échantillon, évaluer TimesFM + XGBoost seul
-    if np.sum(ens_binary) == 0:
-        ens_binary = np.where((raw_binary == 1) & (meta_passed), 1, 0)
-        
+    # Combo = TimesFM + Screener + Méta-Labeler (Prob >= 0.40)
+    meta_passed = meta_probs >= 0.40
+    ens_binary = np.where((tfm_long_short_binary == 1) & (meta_passed), 1, 0)
+    
     res_df = pd.DataFrame({
         'actual_return_pct': actual_returns,
-        'timesfm_binary': raw_binary,
+        'trade_return_pct': trade_returns,
+        'timesfm_binary': tfm_long_short_binary,
         'meta_passed': meta_passed,
         'ensemble_binary': ens_binary
     })
@@ -153,14 +151,14 @@ def run_master_evaluation(days_eval: int = 30):
     buy_hold_ret = ((df_test['Close'].iloc[-1] - df_test['Close'].iloc[0]) / df_test['Close'].iloc[0]) * 100.0
     
     tfm_trades = res_df[res_df['timesfm_binary'] == 1]
-    tfm_win_rate = (tfm_trades['actual_return_pct'] > 0).mean() * 100.0 if len(tfm_trades) > 0 else 0.0
-    tfm_ret = tfm_trades['actual_return_pct'].sum()
+    tfm_win_rate = (tfm_trades['trade_return_pct'] > 0).mean() * 100.0 if len(tfm_trades) > 0 else 0.0
+    tfm_ret = tfm_trades['trade_return_pct'].sum()
     
     ens_trades = res_df[res_df['ensemble_binary'] == 1]
-    ens_win_rate = (ens_trades['actual_return_pct'] > 0).mean() * 100.0 if len(ens_trades) > 0 else 0.0
-    ens_ret = ens_trades['actual_return_pct'].sum()
+    ens_win_rate = (ens_trades['trade_return_pct'] > 0).mean() * 100.0 if len(ens_trades) > 0 else 0.0
+    ens_ret = ens_trades['trade_return_pct'].sum()
     
-    filtered_bad = res_df[(res_df['timesfm_binary'] == 1) & (~res_df['meta_passed']) & (res_df['actual_return_pct'] <= 0)]
+    filtered_bad = res_df[(res_df['timesfm_binary'] == 1) & (~res_df['meta_passed']) & (res_df['trade_return_pct'] <= 0)]
     filter_ratio = (len(filtered_bad) / len(tfm_trades)) * 100.0 if len(tfm_trades) > 0 else 0.0
     
     print(f"{'Métrique / Stratégie':<32} | {'Buy & Hold ETH':<16} | {'TimesFM Seul':<16} | {'Combo TimesFM+XGB':<16}")
@@ -176,7 +174,7 @@ def run_master_evaluation(days_eval: int = 30):
     # --------------------------------------------------------------------------
     print("📋 EXECUTIVE SUMMARY & PRÊT À L'EMPLOI")
     print("-" * 60)
-    print(f"🎉 ÉCHANTILLON EVALUÉ : {len(tfm_trades)} trades TimesFM analysés -> {len(ens_trades)} trades validés par le Méta-Labeler (Win Rate: {ens_win_rate:.2f}%) !")
+    print(f"🎉 ÉCHANTILLON EVALUÉ : {len(tfm_trades)} trades analysés sur le jeu de test -> {len(ens_trades)} trades validés par le Méta-Labeler (Win Rate: {ens_win_rate:.2f}%) !")
     print("="*88 + "\n")
 
 if __name__ == "__main__":
