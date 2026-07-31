@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
 """
 Script de Rapport et d'Évaluation Globale Tout-En-Un (Master Evaluation Suite).
-Inférence PyTorch par BATCH 2D vectorisée (Zero Crash, Zero Segfault).
-Calibration dynamique des seuils de conviction pour afficher des échantillons statistiques représentatifs (15 à 50 trades).
+Auto-boostrap vers l'environnement virtuel .venv pour garantir 0 segfault et 0 conflit C++.
 """
 import os
 import sys
+
+# Auto-bootstrap vers l'interpréteur .venv pour éviter tout conflit de version PyTorch/C++
+base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+venv_python = os.path.join(base_dir, ".venv", "bin", "python3")
+if os.path.exists(venv_python) and os.path.abspath(sys.executable) != os.path.abspath(venv_python):
+    os.execv(venv_python, [venv_python] + sys.argv)
+
 import argparse
 import logging
 import pandas as pd
 import numpy as np
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(base_dir)
 
 from config.settings import config
 from src.data_loader import get_large_eth_data
