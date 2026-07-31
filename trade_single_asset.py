@@ -153,6 +153,7 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
     
     confidence = 50.0
     signal_text = "[bold yellow]HOLD (NEUTRE / CASH)[/bold yellow]"
+    allocated_notional = 0.0
 
     if is_trained and residual_model is not None:
         feat_df = apply_triple_barrier_and_features(raw_data, apply_prescreen=False)
@@ -168,8 +169,11 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
             
             confidence = prob_val * 100.0
             
+            # Allocation Dynamique de Kelly proportionnelle à la confiance IA
             if prob_val >= 0.58:
-                signal_text = "[bold green]ORDER BUY (ACHAT SOTA)[/bold green]"
+                confidence_ratio = (prob_val - 0.50) / 0.50  # 0.16 (à 58%) -> 0.60 (à 80%)
+                allocated_notional = min(5000.0, max(1000.0, 1000.0 + confidence_ratio * 6500.0))
+                signal_text = f"[bold green]ORDER BUY (ACHAT SOTA - ${allocated_notional:,.0f})[/bold green]"
             elif prob_val <= 0.42:
                 signal_text = "[bold red]ORDER SELL (VENTE / CASH)[/bold red]"
             else:
@@ -198,6 +202,7 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
     table.add_row("Prix Actuel Bitcoin (BTC-USD)", f"${current_price:,.2f}")
     table.add_row("Probabilité Inférence IA (1h)", f"{confidence:.1f}%")
     table.add_row("Signal de Décision SOTA", signal_text)
+    table.add_row("Allocation Dynamique de Kelly", f"${allocated_notional:,.2f}" if allocated_notional > 0 else "[yellow]0.00$ (CASH)[/yellow]")
     table.add_row("Position Alpaca Paper", pos_str)
     table.add_row("Capital Total Portefeuille", f"${total_equity:,.2f}")
     table.add_row("Cash Liquide Disponible", f"${cash:,.2f}")
@@ -299,6 +304,8 @@ def main():
 
                         if prob_val >= 0.58:
                             action = "BUY"
+                            confidence_ratio = (prob_val - 0.50) / 0.50
+                            allocated_notional = min(5000.0, max(1000.0, 1000.0 + confidence_ratio * 6500.0))
                             signal_data = [{
                                 "ticker": SINGLE_TICKER,
                                 "action": "BUY",
@@ -306,7 +313,7 @@ def main():
                                 "price": current_price,
                                 "horizon": 1
                             }]
-                            execute_trade_signals(signal_data)
+                            execute_trade_signals(signal_data, threshold=0.58, notional=allocated_notional, max_budget=75000.0, max_trade_cap=5000.0)
                         elif prob_val <= 0.42:
                             action = "SELL"
                         else:
