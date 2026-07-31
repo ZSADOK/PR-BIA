@@ -290,17 +290,17 @@ def timeframe_worker(tf: str):
                     elif prob_val <= 0.42:
                         action = "SELL"
                         if has_open_pos:
-                            signal_text = "[bold red]ORDER SELL (LIQUIDATION POSITION)[/bold red]"
+                            signal_text = "[bold red]ORDRE VENTE[/bold red]"
                         else:
-                            signal_text = "[bold yellow]HOLD (100% CASH - IA BAISSIÈRE)[/bold yellow]"
+                            signal_text = "[bold yellow]CASH (BAISSIÈRE)[/bold yellow]"
                     else:
                         action = "HOLD"
-                        signal_text = "[bold yellow]HOLD (100% CASH - IA NEUTRE)[/bold yellow]"
+                        signal_text = "[bold yellow]CASH (NEUTRE)[/bold yellow]"
 
             # 4. Calcul de l'évolution du prix et graphique sparkline
             prev_p = close_vals[-2] if len(close_vals) >= 2 else current_price
             price_chg_pct = ((current_price - prev_p) / prev_p) * 100.0
-            sparkline_str = make_sparkline(close_vals, length=10)
+            sparkline_str = make_sparkline(close_vals, length=8)
 
             # 5. Mise à jour de l'historique
             update_tf_history(tf, current_price, confidence, action)
@@ -333,8 +333,8 @@ def render_multi_tf_dashboard():
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=4),
-        Layout(name="main", size=14),
-        Layout(name="journal", size=12),
+        Layout(name="main", size=9),
+        Layout(name="journal", size=11),
         Layout(name="footer", size=3)
     )
 
@@ -389,22 +389,22 @@ def render_multi_tf_dashboard():
     # 2. Table Synthèse des 3 Horizons Temporels
     table = Table(title="📊 PORTFEUILLE ENSEMBLE MULTI-HORIZON (1H: 30% | 5M: 20% | 1M: 10% | CASH SAFETY: 40%)", expand=True)
     table.add_column("Horizon", style="cyan", justify="left")
-    table.add_column("Fichier Poids Modèle", style="dim cyan", justify="left")
+    table.add_column("Fichier Modèle", style="dim cyan", justify="left")
     table.add_column("Prix BTC", style="bold white", justify="right")
-    table.add_column("Variation", style="bold white", justify="center")
-    table.add_column("Tendance Sparkline", style="bold yellow", justify="center")
-    table.add_column("Part Cash", style="bold yellow", justify="center")
+    table.add_column("Var %", style="bold white", justify="center")
+    table.add_column("Sparkline", style="bold yellow", justify="center")
+    table.add_column("Part", style="bold yellow", justify="center")
     table.add_column("Plafond ($)", style="bold white", justify="right")
-    table.add_column("Confiance IA", style="bold cyan", justify="right")
+    table.add_column("Confiance", style="bold cyan", justify="right")
     table.add_column("Signal SOTA", style="bold white", justify="center")
-    table.add_column("Allocation Kelly ($)", style="bold green", justify="right")
-    table.add_column("Prochain Scan", style="dim", justify="right")
+    table.add_column("Kelly ($)", style="bold green", justify="right")
+    table.add_column("Scan", style="dim", justify="right")
 
     with STATE_LOCK:
         for tf, cfg in TIMEFRAME_CONFIGS.items():
             st = LIVE_STATES[tf]
             max_b = cash * cfg["budget_pct"]
-            ckpt_basename = os.path.basename(cfg["checkpoint"])
+            ckpt_name = os.path.basename(cfg["checkpoint"]).replace("tabfm_residual_BTC_USD", "BTC_USD")
             price_str = f"${st['price']:,.2f}" if st['price'] > 0 else "---"
             var_pct = st["price_change_pct"]
             var_style = "bold green" if var_pct >= 0 else "bold red"
@@ -412,17 +412,19 @@ def render_multi_tf_dashboard():
             spark_str = f"[cyan]{st['sparkline']}[/cyan]"
             conf_str = f"{st['confidence']:.1f}%"
             sig_str = st["signal_text"]
-            notional_str = f"${st['allocated_notional']:,.2f}" if st['allocated_notional'] > 0 else "0.00$ (CASH)"
+            notional_str = f"${st['allocated_notional']:,.0f}" if st['allocated_notional'] > 0 else "0$"
             cd_str = f"{st['next_countdown']}s"
             
+            tf_short_name = "1h (Swing)" if tf == "1h" else "5m (Intraday)" if tf == "5m" else "1m (Scalping)"
+            
             table.add_row(
-                cfg["name"],
-                ckpt_basename,
+                tf_short_name,
+                ckpt_name,
                 price_str,
                 var_str,
                 spark_str,
                 f"{cfg['budget_pct']*100:.0f}%",
-                f"${max_b:,.2f}",
+                f"${max_b:,.0f}",
                 conf_str,
                 sig_str,
                 notional_str,
