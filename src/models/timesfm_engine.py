@@ -1,7 +1,7 @@
 """
 Module de Modélisation et Prédiction avec Google TimesFM (Zero-Shot & Fine-Tuned).
 Convertit les séries temporelles brutes OHLCV de 5m en prédiction de prix continue.
-Securisé avec inférence par micro-batchs vectorisés (chunk_size=128) pour vitesse maximale sans blocage CPU.
+Securisé avec inférence par micro-batchs vectorisés pour vitesse maximale sans blocage CPU.
 """
 import os
 import numpy as np
@@ -101,7 +101,7 @@ class TimesFMEngine:
 
     def predict_batch_prices(self, windows_list: List[np.ndarray], chunk_size: int = 128) -> np.ndarray:
         """
-        Exécute l'inférence PyTorch vectorisée par micro-batchs de 128 pour vitesse et stabilité maximales.
+        Exécute l'inférence PyTorch vectorisée par micro-batchs pour vitesse et stabilité maximales.
         """
         if not windows_list:
             return np.array([])
