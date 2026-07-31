@@ -155,7 +155,7 @@ def main():
 
     if args.train:
         import subprocess
-        subprocess.run(["python3", "scripts/train_crypto_3split_pipeline.py"])
+        subprocess.run(["python3", "scripts/train_tabfm_residual_multi_asset.py", "--tickers", "BTC-USD,ETH-USD,SOL-USD,AVAX-USD", "--patience", "12"])
     elif args.sell_all:
         execute_sell_all()
     elif args.status:
