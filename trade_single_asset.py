@@ -208,7 +208,7 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
     # Table Journal de Suivi Horaire
     history = load_history()
     j_table = Table(title="📜 JOURNAL DE SUIVI DYNAMIQUE : VÉRIFICATION DES PRÉDICTIONS PAR HEURE", expand=True)
-    j_table.add_column("Horodatage", style="gray", justify="left")
+    j_table.add_column("Horodatage", style="dim", justify="left")
     j_table.add_column("Prix Entrée", style="white", justify="right")
     j_table.add_column("Confiance IA", style="cyan", justify="right")
     j_table.add_column("Action", style="bold white", justify="center")
