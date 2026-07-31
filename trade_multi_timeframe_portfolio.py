@@ -445,58 +445,61 @@ def render_multi_tf_dashboard():
 
     layout["main"].update(Panel(table, style="blue"))
 
-    # 3. Journal de Suivi Combiné avec PnL Réalisé ($ et %)
-    combined_history = []
-    for tf, cfg in TIMEFRAME_CONFIGS.items():
-        h = load_tf_history(cfg["history_file"])
-        for item in h:
-            item["tf_name"] = tf
-            combined_history.append(item)
+    # 3. 3 Tableaux Dédiés par Horizon Temporel (1h, 5m, 1m)
+    journal_layout = Layout()
+    journal_layout.split_row(
+        Layout(name="j_1h", ratio=1),
+        Layout(name="j_5m", ratio=1),
+        Layout(name="j_1m", ratio=1)
+    )
 
-    combined_history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    tf_labels = {
+        "1h": "📜 JOURNAL 1H (SWING)",
+        "5m": "📜 JOURNAL 5M (INTRADAY)",
+        "1m": "📜 JOURNAL 1M (SCALPING)"
+    }
 
-    j_table = Table(title="📜 JOURNAL COMBINÉ DES PRÉDICTIONS INTER-TIMEFRAMES (DÉTAILS PnL $ & %)", expand=True)
-    j_table.add_column("Horizon", style="bold cyan", justify="center", no_wrap=True)
-    j_table.add_column("Horodatage", style="dim", justify="left", no_wrap=True)
-    j_table.add_column("Prix Entrée", style="white", justify="right", no_wrap=True)
-    j_table.add_column("Confiance", style="cyan", justify="right", no_wrap=True)
-    j_table.add_column("Action", style="bold white", justify="center", no_wrap=True)
-    j_table.add_column("Prix Clôture", style="white", justify="right", no_wrap=True)
-    j_table.add_column("Variation", style="bold white", justify="right", no_wrap=True)
-    j_table.add_column("Gain/Perte ($)", style="bold white", justify="right", no_wrap=True)
-    j_table.add_column("Résultat IA", style="bold yellow", justify="center", no_wrap=True)
+    for tf_key, tf_name in [("1h", "j_1h"), ("5m", "j_5m"), ("1m", "j_1m")]:
+        cfg = TIMEFRAME_CONFIGS[tf_key]
+        history = load_tf_history(cfg["history_file"])
+        history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
-    for item in combined_history[:7]:
-        tf_code = item.get("tf_name", "").upper()
-        t_str = item.get("timestamp", "").split(" ")[1] if " " in item.get("timestamp", "") else item.get("timestamp", "")
-        p_in = item.get("entry_price", 0.0)
-        conf = item.get("confidence", 50.0)
-        act = item.get("action", "HOLD")
-        p_out = item.get("exit_price")
-        chg = item.get("change_pct", 0.0)
-        pnl_dlr = item.get("pnl_dollar", 0.0)
-        out = item.get("outcome", "⌛ EN COURS")
+        j_table = Table(title=tf_labels[tf_key], expand=True)
+        j_table.add_column("Heure", style="dim", justify="left", no_wrap=True)
+        j_table.add_column("Entrée", style="white", justify="right", no_wrap=True)
+        j_table.add_column("Signal", style="bold white", justify="center", no_wrap=True)
+        j_table.add_column("PnL ($)", style="bold white", justify="right", no_wrap=True)
+        j_table.add_column("Résultat", style="bold yellow", justify="center", no_wrap=True)
 
-        p_out_str = f"${p_out:,.2f}" if p_out else "---"
-        chg_style = "bold green" if chg >= 0 else "bold red"
-        chg_str = f"[{chg_style}]{chg:+.2f}%[/{chg_style}]" if p_out else "---"
+        for item in history[:5]:
+            t_str = item.get("timestamp", "").split(" ")[1] if " " in item.get("timestamp", "") else item.get("timestamp", "")
+            p_in = item.get("entry_price", 0.0)
+            conf = item.get("confidence", 50.0)
+            act = item.get("action", "HOLD")
+            p_out = item.get("exit_price")
+            pnl_dlr = item.get("pnl_dollar", 0.0)
+            out = item.get("outcome", "⌛ EN COURS")
 
-        if p_out:
-            pnl_style = "bold green" if pnl_dlr >= 0 else "bold red"
-            pnl_str = f"[{pnl_style}]${pnl_dlr:+,.2f}[/{pnl_style}]"
-        else:
-            pnl_str = "---"
+            if p_out:
+                pnl_style = "bold green" if pnl_dlr >= 0 else "bold red"
+                pnl_str = f"[{pnl_style}]${pnl_dlr:+,.2f}[/{pnl_style}]"
+            else:
+                pnl_str = "---"
 
-        if "RAISON" in out:
-            out_style = "[bold green]🏆 RAISON[/bold green]"
-        elif "ERREUR" in out:
-            out_style = "[bold red]❌ ERREUR[/bold red]"
-        else:
-            out_style = f"[bold yellow]⌛ EN COURS (+{tf_code})[/bold yellow]"
+            if "RAISON" in out:
+                out_style = "[bold green]🏆 RAISON[/bold green]"
+            elif "ERREUR" in out:
+                out_style = "[bold red]❌ ERREUR[/bold red]"
+            else:
+                out_style = f"[bold yellow]⌛ EN COURS[/bold yellow]"
 
-        j_table.add_row(tf_code, t_str, f"${p_in:,.2f}", f"{conf:.1f}%", act, p_out_str, chg_str, pnl_str, out_style)
+            act_str = f"[green]BUY ({conf:.0f}%)[/green]" if act == "BUY" else f"[yellow]{act}[/yellow]"
 
-    layout["journal"].update(Panel(j_table, style="blue"))
+            j_table.add_row(t_str, f"${p_in:,.0f}", act_str, pnl_str, out_style)
+
+        journal_layout[tf_name].update(Panel(j_table, style="blue"))
+
+    layout["journal"].update(journal_layout)
 
     layout["footer"].update(Panel(
         "[bold green]✔ Moteur Multi-Horizon 25.8M Actif (Rafraîchissement 4Hz)[/bold green] | [yellow]Threads 1h (30%), 5m (20%), 1m (10%) synchronisés[/yellow] | [white]Appuyez sur Ctrl+C pour quitter[/white]",
