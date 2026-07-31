@@ -475,10 +475,11 @@ def main():
         execute_sell_all()
         return
 
-    # Lancer les 3 workers indépendants dans des threads d'arrière-plan
+    # Lancer les 3 workers indépendants dans des threads d'arrière-plan (échelonnés de 1s)
     for tf in TIMEFRAME_CONFIGS.keys():
         t = threading.Thread(target=timeframe_worker, args=(tf,), daemon=True)
         t.start()
+        time.sleep(1.0)
 
     # Boucle de rendu UI Rich en direct
     with Live(render_multi_tf_dashboard(), refresh_per_second=1, console=console) as live:
