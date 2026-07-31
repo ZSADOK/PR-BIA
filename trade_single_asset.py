@@ -174,6 +174,23 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
     signal_text = "[bold yellow]HOLD (NEUTRE / CASH)[/bold yellow]"
     allocated_notional = 0.0
 
+    # Position Alpaca
+    has_open_pos = False
+    try:
+        positions = trading_client.get_all_positions()
+        btc_pos = [p for p in positions if p.symbol in ["BTCUSD", "BTC/USD"]]
+
+        if btc_pos:
+            has_open_pos = True
+            pos_qty = float(btc_pos[0].qty)
+            pos_val = float(btc_pos[0].market_value)
+            pos_pnl = float(btc_pos[0].unrealized_pl)
+            pos_str = f"[bold green]OUVERTE[/bold green] | Qte: {pos_qty:.4f} | Valeur: ${pos_val:,.2f} | P/L: ${pos_pnl:+.2f}"
+        else:
+            pos_str = "[yellow]AUCUNE (100% CASH LIQUIDE)[/yellow]"
+    except Exception:
+        pos_str = "[yellow]NON CONNECTÉ ALPACA[/yellow]"
+
     if is_trained and residual_model is not None:
         feat_df = apply_triple_barrier_and_features(raw_data, apply_prescreen=False)
         if not feat_df.empty:
@@ -194,24 +211,12 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
                 allocated_notional = min(5000.0, max(1000.0, 1000.0 + confidence_ratio * 6500.0))
                 signal_text = f"[bold green]ORDER BUY (ACHAT SOTA - ${allocated_notional:,.0f})[/bold green]"
             elif prob_val <= 0.42:
-                signal_text = "[bold red]ORDER SELL (VENTE / CASH)[/bold red]"
+                if has_open_pos:
+                    signal_text = "[bold red]ORDER SELL (LIQUIDATION POSITION)[/bold red]"
+                else:
+                    signal_text = "[bold yellow]HOLD (100% CASH LIQUIDE - IA BAISSIÈRE)[/bold yellow]"
             else:
-                signal_text = "[bold yellow]HOLD (NEUTRE / CONFUSION)[/bold yellow]"
-
-    # Position Alpaca
-    try:
-        positions = trading_client.get_all_positions()
-        btc_pos = [p for p in positions if p.symbol in ["BTCUSD", "BTC/USD"]]
-
-        if btc_pos:
-            pos_qty = float(btc_pos[0].qty)
-            pos_val = float(btc_pos[0].market_value)
-            pos_pnl = float(btc_pos[0].unrealized_pl)
-            pos_str = f"[bold green]OUVERTE[/bold green] | Qte: {pos_qty:.4f} | Valeur: ${pos_val:,.2f} | P/L: ${pos_pnl:+.2f}"
-        else:
-            pos_str = "[yellow]AUCUNE (100% CASH LIQUIDE)[/yellow]"
-    except Exception:
-        pos_str = "[yellow]NON CONNECTÉ ALPACA[/yellow]"
+                signal_text = "[bold yellow]HOLD (100% CASH LIQUIDE - IA NEUTRE)[/bold yellow]"
 
     # Table Principale Statut
     table = Table(title=f"📊 ÉTAT DU MODÈLE ET COMPTE ALPACA PAPER | STATUT: {'[green]OPTIMISÉ (CAUM 242.11)[/green]' if is_trained else '[yellow]NON ENTRENÉ[/yellow]'}", expand=True)
