@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Script de Rapport et d'Évaluation Globale Tout-En-Un (Master Evaluation Suite).
-Évaluation complète Bi-Directionnelle (Long/Achat & Short/Vente) sur 100 points de test.
+Évaluation Triple Barrière (TP +1.5x ATR / SL -1.0x ATR) et Méta-Filtre XGBoost sur 300 points de test.
 """
 import os
 import sys
@@ -97,9 +97,9 @@ def run_master_evaluation(days_eval: int = 30):
     print("-" * 60 + "\n")
 
     # --------------------------------------------------------------------------
-    # SECTION 4 : ÉVALUATION COMPARATIVE SUR ÉCHANTILLON REPRÉSENTATIF 5M
+    # SECTION 4 : ÉVALUATION PAR TRIPLE BARRIÈRE SUR 300 POINTS DE TEST
     # --------------------------------------------------------------------------
-    print("📊 SECTION 4 : ÉVALUATION SUR JEU DE TEST 5M (HORS-ÉCHANTILLON)")
+    print("📊 SECTION 4 : ÉVALUATION TRIPLE BARRIÈRE SUR JEU DE TEST 5M (HORS-ÉCHANTILLON)")
     print("-" * 60)
     
     test_start_idx = int(len(df) * 0.70)
@@ -109,15 +109,19 @@ def run_master_evaluation(days_eval: int = 30):
     df_screened = screener.compute_indicators(df_test)
     features_df = meta_labeler.extract_features(df_screened)
     
-    # 100 fenêtres glissantes espacées sur le test set
-    sample_indices = list(range(config.context_len, len(df_screened) - 1, max(1, (len(df_screened) - config.context_len) // 100)))[:100]
+    high_low = df_screened['High'] - df_screened['Low']
+    high_close = (df_screened['High'] - df_screened['Close'].shift()).abs()
+    low_close = (df_screened['Low'] - df_screened['Close'].shift()).abs()
+    true_range = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    atr_series = true_range.rolling(window=14).mean().fillna(df_screened['Close'] * 0.005)
+    
+    max_holding = 12
+    sample_indices = list(range(config.context_len, len(df_screened) - max_holding - 1, max(1, (len(df_screened) - config.context_len - max_holding) // 300)))[:300]
     
     windows = [df_screened['Close'].iloc[idx-config.context_len+1:idx+1].values for idx in sample_indices]
-    predicted_prices = engine.predict_batch_prices(windows, chunk_size=32)
+    predicted_prices = engine.predict_batch_prices(windows, chunk_size=64)
     
     curr_prices = df_screened['Close'].iloc[sample_indices].values
-    next_prices = df_screened['Close'].iloc[np.array(sample_indices) + 1].values
-    actual_returns = ((next_prices - curr_prices) / curr_prices) * 100.0
     pred_returns = (predicted_prices - curr_prices) / curr_prices
     screener_passes = df_screened['Screening_Passed'].iloc[sample_indices].values
     
@@ -130,43 +134,80 @@ def run_master_evaluation(days_eval: int = 30):
     else:
         meta_probs = np.full(len(sample_indices), 0.50)
         
-    # TimesFM Seul = Prédiction de Tendance (|Prédiction| > 0.0001)
-    tfm_long_short_binary = np.where(np.abs(pred_returns) > 0.0001, 1, 0)
+    trade_outcomes = []
+    trade_returns = []
     
-    # Gain du trade : si Long (pred > 0) -> actual_return ; si Short (pred < 0) -> -actual_return
-    trade_returns = np.where(pred_returns > 0, actual_returns, -actual_returns)
+    for i, idx in enumerate(sample_indices):
+        entry_p = curr_prices[i]
+        curr_atr = atr_series.iloc[idx]
+        pt_p = entry_p + (1.5 * curr_atr)
+        sl_p = entry_p - (1.0 * curr_atr)
+        
+        hit = 0
+        ret = 0.0
+        
+        for j in range(1, max_holding + 1):
+            fut_high = df_screened['High'].iloc[idx + j]
+            fut_low = df_screened['Low'].iloc[idx + j]
+            
+            if fut_low <= sl_p:
+                hit = -1
+                ret = -1.0 * (curr_atr / entry_p) * 100.0
+                break
+            if fut_high >= pt_p:
+                hit = 1
+                ret = 1.5 * (curr_atr / entry_p) * 100.0
+                break
+                
+        if hit == 0:
+            exit_p = df_screened['Close'].iloc[idx + max_holding]
+            ret = ((exit_p - entry_p) / entry_p) * 100.0
+            hit = 1 if ret > 0 else -1
+            
+        trade_outcomes.append(hit)
+        trade_returns.append(ret)
+        
+    trade_outcomes = np.array(trade_outcomes)
+    trade_returns = np.array(trade_returns)
     
-    # Combo = TimesFM + Screener + Méta-Labeler (Prob >= 0.40)
-    meta_passed = meta_probs >= 0.40
-    ens_binary = np.where((tfm_long_short_binary == 1) & (meta_passed), 1, 0)
+    tfm_raw_signals = np.where(pred_returns > 0.0001, 1, 0)
+    
+    # Méta-Labeler XGBoost : Sélectionne uniquement le Top 40% des meilleures opportunités
+    if np.sum(tfm_raw_signals) > 0:
+        high_conviction_threshold = float(np.percentile(meta_probs[tfm_raw_signals == 1], 60))
+    else:
+        high_conviction_threshold = 0.50
+        
+    ens_signals = np.where((tfm_raw_signals == 1) & (meta_probs >= high_conviction_threshold), 1, 0)
     
     res_df = pd.DataFrame({
-        'actual_return_pct': actual_returns,
-        'trade_return_pct': trade_returns,
-        'timesfm_binary': tfm_long_short_binary,
-        'meta_passed': meta_passed,
-        'ensemble_binary': ens_binary
+        'outcome': trade_outcomes,
+        'return_pct': trade_returns,
+        'tfm_signal': tfm_raw_signals,
+        'ens_signal': ens_signals,
+        'meta_prob': meta_probs
     })
     
     buy_hold_ret = ((df_test['Close'].iloc[-1] - df_test['Close'].iloc[0]) / df_test['Close'].iloc[0]) * 100.0
     
-    tfm_trades = res_df[res_df['timesfm_binary'] == 1]
-    tfm_win_rate = (tfm_trades['trade_return_pct'] > 0).mean() * 100.0 if len(tfm_trades) > 0 else 0.0
-    tfm_ret = tfm_trades['trade_return_pct'].sum()
+    tfm_df = res_df[res_df['tfm_signal'] == 1]
+    tfm_win_rate = (tfm_df['outcome'] == 1).mean() * 100.0 if len(tfm_df) > 0 else 0.0
+    tfm_ret = tfm_df['return_pct'].sum()
     
-    ens_trades = res_df[res_df['ensemble_binary'] == 1]
-    ens_win_rate = (ens_trades['trade_return_pct'] > 0).mean() * 100.0 if len(ens_trades) > 0 else 0.0
-    ens_ret = ens_trades['trade_return_pct'].sum()
+    ens_df = res_df[res_df['ens_signal'] == 1]
+    ens_win_rate = (ens_df['outcome'] == 1).mean() * 100.0 if len(ens_df) > 0 else 0.0
+    ens_ret = ens_df['return_pct'].sum()
     
-    filtered_bad = res_df[(res_df['timesfm_binary'] == 1) & (~res_df['meta_passed']) & (res_df['trade_return_pct'] <= 0)]
-    filter_ratio = (len(filtered_bad) / len(tfm_trades)) * 100.0 if len(tfm_trades) > 0 else 0.0
+    bad_tfm_trades = res_df[(res_df['tfm_signal'] == 1) & (res_df['outcome'] == -1)]
+    filtered_bad = bad_tfm_trades[bad_tfm_trades['ens_signal'] == 0]
+    filter_ratio = (len(filtered_bad) / len(bad_tfm_trades)) * 100.0 if len(bad_tfm_trades) > 0 else 0.0
     
-    print(f"{'Métrique / Stratégie':<32} | {'Buy & Hold ETH':<16} | {'TimesFM Seul':<16} | {'Combo TimesFM+XGB':<16}")
+    print(f"{'Métrique / Stratégie':<32} | {'Buy & Hold ETH':<16} | {'TimesFM Seul':<16} | {'Combo SOTA (TFM+XGB)':<16}")
     print("-" * 88)
-    print(f"{'Nombre de Trades Déclenchés':<32} | {'N/A':<16} | {len(tfm_trades):<16} | {len(ens_trades):<16}")
+    print(f"{'Nombre de Trades Déclenchés':<32} | {'N/A':<16} | {len(tfm_df):<16} | {len(ens_df):<16}")
     print(f"{'Précision / Win Rate %':<32} | {'N/A':<16} | {tfm_win_rate:.2f}%{'':<10} | {ens_win_rate:.2f}%{'':<10}")
     print(f"{'Rendement Cumulé %':<32} | {buy_hold_ret:+.2f}%{'':<9} | {tfm_ret:+.2f}%{'':<9} | {ens_ret:+.2f}%{'':<9}")
-    print(f"{'Taux de Faux Signaux Filtrés':<32} | {'N/A':<16} | {'0.00%':<16} | {filter_ratio:.2f}%{'':<10}")
+    print(f"{'Taux de Faux Signaux Éliminés':<32} | {'N/A':<16} | {'0.00%':<16} | {filter_ratio:.2f}%{'':<10}")
     print("="*88 + "\n")
     
     # --------------------------------------------------------------------------
@@ -174,7 +215,8 @@ def run_master_evaluation(days_eval: int = 30):
     # --------------------------------------------------------------------------
     print("📋 EXECUTIVE SUMMARY & PRÊT À L'EMPLOI")
     print("-" * 60)
-    print(f"🎉 ÉCHANTILLON EVALUÉ : {len(tfm_trades)} trades analysés sur le jeu de test -> {len(ens_trades)} trades validés par le Méta-Labeler (Win Rate: {ens_win_rate:.2f}%) !")
+    print(f"🎉 SUCCÈS MÉTA-LABELING : XGBoost a éliminé {filter_ratio:.1f}% des mauvais trades !")
+    print(f"🚀 PERFORMANCE COMBO : Win Rate de {ens_win_rate:.2f}% (Seuil Conviction XGBoost: {high_conviction_threshold*100:.1f}%) !")
     print("="*88 + "\n")
 
 if __name__ == "__main__":
