@@ -1,8 +1,9 @@
 """
 Module d'Exécution Alpaca Paper Trading pour Bot de Trading Algorithmique.
 Connecte le bot à l'API Alpaca Paper Trading (Cryptos 24/7 & Actions US).
-Lit le signal TimesFM + Méta-Labeler (Étape 2/5m) et le Sizing Risk Manager (Étape 3)
-pour exécuter automatiquement les ordres d'Achat/Vente sur Alpaca.
+Exécution automatique bi-directionnelle :
+- Achète (BUY) sur signal haussier validé (1) avec Sizing Kelly.
+- Revend (SELL/CLOSE) sur signal baissier/neutre (0) si une position est ouverte.
 """
 import os
 import requests
@@ -60,6 +61,24 @@ class AlpacaExecutor:
             logger.error(f"Erreur fetch_positions Alpaca: {e}")
             return []
 
+    def close_position(self, symbol: str = "ETH/USD") -> Dict[str, Any]:
+        """Ferme la position ouverte pour l'actif spécifié."""
+        alpaca_symbol = symbol.replace("/", "")
+        url = f"{self.base_url}/v2/positions/{alpaca_symbol}"
+        try:
+            res = requests.delete(url, headers=self.headers, timeout=5)
+            if res.status_code == 200:
+                logger.info(f"✔ Position {symbol} fermée/revendue avec succès sur Alpaca !")
+                return {"status": "closed", "raw": res.json()}
+            elif res.status_code == 404:
+                return {"status": "no_position", "reason": "Aucune position ouverte à fermer"}
+            else:
+                logger.error(f"Erreur fermeture position Alpaca ({res.status_code}): {res.text}")
+                return {"status": "error", "reason": res.text}
+        except Exception as e:
+            logger.error(f"Exception fermeture position Alpaca: {e}")
+            return {"status": "error", "reason": str(e)}
+
     def execute_order(
         self,
         symbol: str = "ETH/USD",
@@ -85,7 +104,7 @@ class AlpacaExecutor:
         else:
             return {"status": "rejected", "reason": "Ni notional ni qty spécifié"}
             
-        logger.info(f"[ALPACA ORDER] Transmission ordre {side.upper()} {payload.get('notional', payload.get('qty'))} $ sur {alpaca_symbol}...")
+        logger.info(f"[ALPACA ORDER] Transmission ordre {side.upper()} ${payload.get('notional', payload.get('qty'))} sur {alpaca_symbol}...")
         
         try:
             res = requests.post(url, json=payload, headers=self.headers, timeout=5)
@@ -109,21 +128,45 @@ class AlpacaExecutor:
         signal_binary = signal_dict.get('signal_binary', 0)
         capital_allocated = position_size_dict.get('capital_allocated', 0.0)
         
+        # Vérification des positions ouvertes actuelles
+        open_positions = self.fetch_positions()
+        has_open_pos = any(pos.get('symbol') in [symbol, symbol.replace('/', ''), symbol.replace('/', '-')] for pos in open_positions)
+        
+        # CAS 1 : Signal HAUSSIER (BUY = 1) -> ACHETER si pas déjà en position
         if signal_binary == 1 and capital_allocated > 10.0:
-            order_res = self.execute_order(
-                symbol=symbol,
-                side="buy",
-                notional=capital_allocated
-            )
+            if not has_open_pos:
+                order_res = self.execute_order(
+                    symbol=symbol,
+                    side="buy",
+                    notional=capital_allocated
+                )
+                return {
+                    "action": "BUY_EXECUTED_ALPACA",
+                    "symbol": symbol,
+                    "notional": capital_allocated,
+                    "order_details": order_res
+                }
+            else:
+                return {
+                    "action": "HOLD_POSITION",
+                    "symbol": symbol,
+                    "reason": "Position déjà ouverte sur Alpaca, maintien de la position"
+                }
+                
+        # CAS 2 : Signal NEUTRE / BAISSIER (SELL = 0) -> REVENDRE / FERMER si position ouverte
+        elif signal_binary == 0 and has_open_pos:
+            close_res = self.close_position(symbol=symbol)
             return {
-                "action": "BUY_EXECUTED_ALPACA",
+                "action": "SELL_CLOSE_EXECUTED_ALPACA",
                 "symbol": symbol,
-                "notional": capital_allocated,
-                "order_details": order_res
+                "reason": "Signal neutre/baissier (0) détecté, revente de la position",
+                "close_details": close_res
             }
+            
+        # CAS 3 : Aucun ordre nécessaire
         else:
             return {
                 "action": "NEUTRAL_HOLD",
                 "symbol": symbol,
-                "reason": "Signal neutre (0) ou capital alloué insuffisant"
+                "reason": "Pas de position ouverte et aucun signal d'achat"
             }
