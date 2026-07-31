@@ -1,14 +1,14 @@
 """
-Configuration centrale du Bot de Trading Quantitatif TimesFM + Meta-Labeler (ETH 5m).
+Configuration centrale du Bot de Trading Quantitatif TimesFM + Meta-Labeler (ETH 5m / Alpaca).
 """
 import os
 from pydantic import BaseModel
 
 class TradingConfig(BaseModel):
     # Actif & Timeframe 5 Minutes (5m)
-    symbol: str = "ETH/USDT"
+    symbol: str = "ETH/USD"       # Paire Alpaca / Exchange
     yf_symbol: str = "ETH-USD"
-    timeframe: str = "5m"         # Timeframe ultra-rapide 5 minutes
+    timeframe: str = "5m"         # Timeframe 5 minutes
     
     # Paramètres TimesFM
     context_len: int = 512        # Fenêtre de mémoire historique (512 * 5 min = ~42.6 heures)
@@ -31,8 +31,8 @@ class TradingConfig(BaseModel):
     max_kelly_fraction: float = 0.25 # Fraction de Kelly (Quarter-Kelly)
     max_portfolio_allocation: float = 0.50 # Enveloppe de sécurité (max 50% du capital)
     
-    # Exchange CCXT
-    exchange_id: str = "binance"
+    # Exchange Selection (Alpaca Paper Trading 24/7)
+    exchange_id: str = "alpaca"    # 'alpaca' ou 'binance'
     sandbox_mode: bool = True     # Mode Paper Trading
 
 config = TradingConfig()

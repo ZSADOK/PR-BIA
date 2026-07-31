@@ -1,17 +1,20 @@
 """
-Point d'Entrée Principal du Bot de Trading Algorithmique TimesFM + Meta-Labeler (ETH 5m).
+Point d'Entrée Principal du Bot de Trading Algorithmique TimesFM + Meta-Labeler (ETH 5m Alpaca Paper).
 Unifie :
-- Ingestion de données 5m massives (CCXT Binance)
+- Ingestion de données 5m massives (CCXT Binance / Alpaca)
 - Pré-Screening Volume Relatif (RVOL > 1.2x) & Momentum 5m
-- Inférence IA TimesFM (H+1 5m forecast)
+- Inférence IA TimesFM (5m H+1 forecast)
 - Méta-Filtre XGBoost Triple Barrière (Win Rate > 75%)
 - Dynamic Kelly Allocation & Envelope Safety (Risk Manager)
-- Exécution automatique CCXT (Market/Limit, Sandbox/Live)
+- Exécution automatique des ordres sur Alpaca Paper Trading
 """
 import os
 import sys
 import logging
 import pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from config.settings import config
 from src.data_loader import get_large_eth_data
@@ -20,16 +23,17 @@ from src.models.timesfm_engine import TimesFMEngine
 from src.models.meta_labeler import MetaLabeler
 from src.risk.risk_manager import RiskManager
 from src.execution.ccxt_executor import CCXTExecutor
+from src.execution.alpaca_executor import AlpacaExecutor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("TimesFMBot5m")
 
-def run_trading_cycle(capital: float = 10000.0) -> dict:
-    logger.info("=== NOUVEAU CYCLE DU BOT DE TRADING ETH 5M (TIMESFM + META-LABELER) ===")
+def run_trading_cycle(capital: float = 100000.0) -> dict:
+    logger.info("=== NOUVEAU CYCLE DU BOT DE TRADING ETH 5M (TIMESFM + ALPACA PAPER TRADING) ===")
     
-    # 1. Ingestion des Données 5m (CCXT Binance)
-    logger.info(f"1. Ingestion des données historiques {config.timeframe} pour {config.symbol}...")
-    df = get_large_eth_data(symbol=config.symbol, timeframe=config.timeframe, days_back=30, force_refresh=False)
+    # 1. Ingestion des Données 5m
+    logger.info(f"1. Ingestion des données historiques {config.timeframe} pour ETH/USDT...")
+    df = get_large_eth_data(symbol="ETH/USDT", timeframe=config.timeframe, days_back=30, force_refresh=False)
     
     if len(df) < 50:
         logger.error("Données insuffisantes.")
@@ -51,15 +55,14 @@ def run_trading_cycle(capital: float = 10000.0) -> dict:
     signal = engine.generate_signal(df_screened, screener_passed=latest_screen['passed'])
     logger.info(f"Prédiction TimesFM Prix H+1 (5m) : {signal['predicted_price']:.2f} $ (Variation: {signal['predicted_return_pct']:+.4f}%)")
     
-    # 3.5 ÉVALUATION DU MÉTA-LABELER XGBOOST (Élimination des faux signaux)
-    logger.info("3.5 Évaluation par le Méta-Filtre XGBoost (Triple Barrière)...")
+    # 3.5 ÉVALUATION DU MÉTA-LABELER XGBOOST (Triple Barrière)
+    logger.info("3.5 Évaluation par le Méta-Filtre XGBoost...")
     meta_labeler = MetaLabeler()
     meta_confidence = meta_labeler.predict_meta_confidence(df_screened, timesfm_pred_return=signal['predicted_return_pct']/100.0)
     
     meta_passed = meta_confidence >= config.min_meta_confidence
     logger.info(f"Score de Confiance Méta-Model : {meta_confidence*100:.2f}% (Seuil requis >= {config.min_meta_confidence*100:.0f}%) -> Passed: {meta_passed}")
     
-    # Validation finale du Signal Binaire
     final_signal_binary = 1 if (signal['signal_binary'] == 1 and meta_passed) else 0
     signal['signal_binary'] = final_signal_binary
     signal['signal_label'] = "BUY (LONG - META CONFIRMED)" if final_signal_binary == 1 else "SELL / NEUTRAL"
@@ -82,18 +85,28 @@ def run_trading_cycle(capital: float = 10000.0) -> dict:
         historical_win_rate=max(0.60, meta_confidence)
     )
     
-    logger.info(f"Position Sizing : Capital Alloué = {position_info['capital_allocated']:.2f} € | Units = {position_info['quantity_units']:.4f} ETH")
-    if position_info['capital_allocated'] > 0:
-        logger.info(f"Stop-Loss (5m) = {position_info['stop_loss_price']:.2f} $ | Take-Profit (5m) = {position_info['take_profit_price']:.2f} $")
+    logger.info(f"Position Sizing : Capital Alloué = {position_info['capital_allocated']:.2f} $ | Units = {position_info['quantity_units']:.4f} ETH")
     
-    # 5. Exécution Automatisée CCXT
-    logger.info("5. Exécution automatique via CCXT Executor...")
-    executor = CCXTExecutor(exchange_id=config.exchange_id, sandbox=config.sandbox_mode)
-    execution_result = executor.execute_bot_cycle(
-        signal_dict=signal,
-        position_size_dict=position_info,
-        symbol=config.symbol
-    )
+    # 5. Exécution Automatisée sur Alpaca ou CCXT
+    logger.info(f"5. Exécution automatique via {config.exchange_id.upper()} Executor...")
+    if config.exchange_id == "alpaca":
+        executor = AlpacaExecutor()
+        acc_info = executor.fetch_account()
+        cash_val = float(acc_info.get('cash', 0.0))
+        account_num = acc_info.get('account_number', 'PA3T5NINSLGS')
+        logger.info(f"Compte Alpaca N° {account_num} connecté. Solde Cash: ${cash_val:,.2f}")
+        execution_result = executor.execute_bot_cycle(
+            signal_dict=signal,
+            position_size_dict=position_info,
+            symbol="ETH/USD"
+        )
+    else:
+        executor = CCXTExecutor(exchange_id=config.exchange_id, sandbox=config.sandbox_mode)
+        execution_result = executor.execute_bot_cycle(
+            signal_dict=signal,
+            position_size_dict=position_info,
+            symbol=config.symbol
+        )
     
     logger.info(f"Résultat d'exécution : {execution_result['action']}")
     return {
@@ -106,5 +119,5 @@ def run_trading_cycle(capital: float = 10000.0) -> dict:
 
 if __name__ == "__main__":
     res = run_trading_cycle()
-    print("\n=== FIN DU CYCLE ETH 5M ===")
+    print("\n=== FIN DU CYCLE ETH 5M ALPACA ===")
     print(res)
