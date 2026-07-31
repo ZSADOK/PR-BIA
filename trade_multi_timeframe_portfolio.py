@@ -159,13 +159,18 @@ def update_tf_history(tf: str, current_price: float, confidence: float, action: 
                 elapsed_sec = cfg["min_elapsed_sec"] + 1.0
 
             if elapsed_sec >= cfg["min_elapsed_sec"]:
-                entry_price = entry["entry_price"]
-                chg_pct = ((current_price - entry_price) / entry_price) * 100.0
+                entry_price = entry.get("entry_price", entry.get("price", current_price))
+                if entry_price > 0:
+                    chg_pct = ((current_price - entry_price) / entry_price) * 100.0
+                else:
+                    chg_pct = 0.0
+
                 entry["exit_price"] = current_price
                 entry["exit_time"] = now_str
                 entry["change_pct"] = chg_pct
                 
-                predicted_up = entry["confidence"] >= 58.0
+                entry_conf = float(entry.get("confidence", entry.get("Confiance", 50.0)))
+                predicted_up = entry_conf >= 58.0
                 actual_up = current_price > entry_price
                 
                 if (predicted_up and actual_up) or (not predicted_up and not actual_up):
