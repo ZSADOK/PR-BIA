@@ -71,17 +71,20 @@ def load_trained_residual_transformer(interval: str = "5m"):
 
 residual_model, feature_cols, CHECKPOINT_PATH, is_trained = load_trained_residual_transformer()
 
-def update_and_verify_hourly_history(current_price: float, current_confidence: float, action: str):
+def update_and_verify_hourly_history(current_price: float, current_confidence: float, action: str, interval: str = "5m"):
     """
-    Vérifie les prédictions passées (1h plus tard) et enregistre le résultat (Raisons/Erreurs & PnL).
-    Dédoublonne les entrées sur la même heure et attend au moins 50 minutes avant de valider à H+1.
+    Vérifie les prédictions passées (5m ou 1h plus tard) et enregistre le résultat (Raisons/Erreurs & PnL).
+    Dédoublonne les entrées sur le même créneau et attend l'écoulement de la bougie avant de valider.
     """
     history = load_history()
     now_dt = datetime.now()
     now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
-    current_hour_key = now_dt.strftime("%Y-%m-%d %H:00")
+    
+    # Seuil d'écoulement minimum : 250s (~4.2 min) pour 5m, 3000s (50 min) pour 1h
+    min_elapsed_sec = 250.0 if interval == "5m" else 3000.0
+    current_key = now_dt.strftime("%Y-%m-%d %H:%M") if interval == "5m" else now_dt.strftime("%Y-%m-%d %H:00")
 
-    # 1. Ne fermer une prédiction en attente que si au moins 50 minutes (~3000s) se sont écoulées
+    # 1. Ne fermer une prédiction en attente que si la durée de la bougie s'est écoulée
     for entry in history:
         if entry.get("status") == "PENDING":
             entry_time_str = entry.get("timestamp", "")
@@ -89,9 +92,9 @@ def update_and_verify_hourly_history(current_price: float, current_confidence: f
                 entry_dt = datetime.strptime(entry_time_str, "%Y-%m-%d %H:%M:%S")
                 elapsed_sec = (now_dt - entry_dt).total_seconds()
             except Exception:
-                elapsed_sec = 3600.0
+                elapsed_sec = min_elapsed_sec + 1.0
 
-            if elapsed_sec >= 3000:
+            if elapsed_sec >= min_elapsed_sec:
                 entry_price = entry["entry_price"]
                 price_change_pct = ((current_price - entry_price) / entry_price) * 100.0
                 
@@ -109,11 +112,11 @@ def update_and_verify_hourly_history(current_price: float, current_confidence: f
                     
                 entry["status"] = "COMPLETED"
 
-    # 2. Vérifier si une prédiction a déjà été enregistrée pour cette heure courante
+    # 2. Vérifier si une prédiction a déjà été enregistrée pour cette plage temporelle
     already_exists = False
     for entry in history:
         e_time = entry.get("timestamp", "")
-        if e_time.startswith(current_hour_key):
+        if e_time.startswith(current_key[:15]): # Comparaison sur les 15 premiers caractères (ex: YYYY-MM-DD HH:M)
             already_exists = True
             entry["confidence"] = current_confidence
             entry["action"] = action
@@ -128,7 +131,7 @@ def update_and_verify_hourly_history(current_price: float, current_confidence: f
             "exit_price": None,
             "exit_time": None,
             "change_pct": 0.0,
-            "outcome": "⌛ EN COURS (+1h)",
+            "outcome": "⌛ EN COURS (+5m)" if interval == "5m" else "⌛ EN COURS (+1h)",
             "status": "PENDING"
         }
         history.append(new_entry)
@@ -306,6 +309,7 @@ def main():
     if args.continuous:
         with Live(get_single_asset_live_panel(args.interval_sec), refresh_per_second=1, console=console) as live:
             while True:
+                start_t = time.time()
                 current_interval = "5m" if "5m" in CHECKPOINT_PATH else "1h"
                 raw_data = yf.download(SINGLE_TICKER, period="30d", interval=current_interval, progress=False)
                 close_series = raw_data["Close"].iloc[:, 0] if isinstance(raw_data["Close"], pd.DataFrame) else raw_data["Close"]
@@ -347,11 +351,15 @@ def main():
                             action = "HOLD"
 
                 # Mise à jour et vérification du journal de suivi
-                update_and_verify_hourly_history(current_price, confidence, action)
+                update_and_verify_hourly_history(current_price, confidence, action, interval=current_interval)
 
-                # Compte à rebours 1 heure (3600s)
-                for elapsed in range(args.interval_sec):
-                    rem = args.interval_sec - elapsed
+                # Calcul du temps écoulé pendant le téléchargement et l'inférence
+                calc_duration = time.time() - start_t
+                remaining_wait = int(max(1, args.interval_sec - calc_duration))
+
+                # Compte à rebours ajusté sans dérive temporelle
+                for elapsed in range(remaining_wait):
+                    rem = remaining_wait - elapsed
                     live.update(get_single_asset_live_panel(rem))
                     time.sleep(1.0)
 
