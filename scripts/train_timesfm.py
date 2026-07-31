@@ -1,9 +1,10 @@
 """
-Script d'Entraînement & Fine-Tuning Ultra-Optimisé pour Google TimesFM 1.0 (ETH 1h).
-Intègre l'Early Stopping dynamique avec patience et la sauvegarde du meilleur modèle.
+Script d'Entraînement & Fine-Tuning Ultra-Optimisé pour Google TimesFM 1.0 (ETH 5m / 1h).
+Intègre l'adaptation dynamique de la fenêtre contextuelle, l'Early Stopping avec patience,
+et prévient tout risque de ValueError sur les datasets de petite taille.
 
-Usage Colab :
-!python scripts/train_timesfm.py --epochs 30 --patience 5 --days 730 --lr 5e-5
+Usage Colab 5m :
+!python scripts/train_timesfm.py --timeframe 5m --days 60 --epochs 30 --patience 5 --lr 5e-5
 """
 import os
 import sys
@@ -67,7 +68,7 @@ if HAS_TORCH:
             return pred
 
 # ==============================================================================
-# DATASET PYTORCH POUR SÉRIES TEMPORELLES
+# DATASET PYTORCH POUR SÉRIES TEMPORELLES (SÉCURISÉ)
 # ==============================================================================
 class TimesFMTimeSeriesDataset(Dataset):
     def __init__(self, prices: np.ndarray, context_len: int = 512, horizon_len: int = 1):
@@ -76,7 +77,8 @@ class TimesFMTimeSeriesDataset(Dataset):
         self.horizon_len = horizon_len
 
     def __len__(self):
-        return len(self.prices) - self.context_len - self.horizon_len + 1
+        length = len(self.prices) - self.context_len - self.horizon_len + 1
+        return max(0, length)
 
     def __getitem__(self, idx):
         context = self.prices[idx : idx + self.context_len]
@@ -98,8 +100,8 @@ class TimesFMTimeSeriesDataset(Dataset):
 # ==============================================================================
 # INGESTION DES DONNÉES ETH/USDT (CCXT BINANCE)
 # ==============================================================================
-def download_historical_data(symbol: str = "ETH/USDT", timeframe: str = "1h", days_back: int = 730) -> pd.DataFrame:
-    logger.info(f"📥 Téléchargement de {days_back} jours (~{days_back*24} bougies 1h) pour {symbol} via Binance...")
+def download_historical_data(symbol: str = "ETH/USDT", timeframe: str = "5m", days_back: int = 60) -> pd.DataFrame:
+    logger.info(f"📥 Téléchargement de {days_back} jours de bougies {timeframe} pour {symbol} via Binance...")
     exchange = ccxt.binance({'enableRateLimit': True})
     now_ms = exchange.milliseconds()
     since_ms = now_ms - (days_back * 24 * 60 * 60 * 1000)
@@ -129,15 +131,16 @@ def download_historical_data(symbol: str = "ETH/USDT", timeframe: str = "1h", da
     df['Timestamp'] = pd.to_datetime(df['Timestamp'], unit='ms', utc=True)
     df.set_index('Timestamp', inplace=True)
     df = df[~df.index.duplicated(keep='first')].sort_index()
-    logger.info(f"✅ {len(df)} bougies 1h récupérées. Période: {df.index[0]} à {df.index[-1]}")
+    logger.info(f"✅ {len(df)} bougies {timeframe} récupérées. Période: {df.index[0]} à {df.index[-1]}")
     return df
 
 # ==============================================================================
-# PIPELINE DE FINE-TUNING AVEC EARLY STOPPING
+# PIPELINE DE FINE-TUNING AVEC SÉCURITÉ CONTEXTUELLE DYNAMIQUE
 # ==============================================================================
 def train(
     symbol: str = "ETH/USDT",
-    days_back: int = 730,
+    timeframe: str = "5m",
+    days_back: int = 60,
     epochs: int = 30,
     patience: int = 5,
     batch_size: int = 32,
@@ -153,24 +156,35 @@ def train(
     if device.type == "cuda":
         logger.info(f"🔥 GPU Détecté : {torch.cuda.get_device_name(0)}")
 
-    df = download_historical_data(symbol=symbol, timeframe="1h", days_back=days_back)
+    df = download_historical_data(symbol=symbol, timeframe=timeframe, days_back=days_back)
     close_prices = df['Close'].values
 
+    # Adaptation dynamique de la longueur de contexte si le dataset est trop court
+    min_required_len = int(len(close_prices) * 0.15) - 2
+    if context_len >= min_required_len:
+        effective_context_len = max(64, min_required_len)
+        logger.warning(f"Ajustement dynamique de context_len de {context_len} à {effective_context_len} pour correspondre au dataset de validation.")
+    else:
+        effective_context_len = context_len
+
     split_idx = int(len(close_prices) * 0.85)
-    train_dataset = TimesFMTimeSeriesDataset(close_prices[:split_idx], context_len=context_len, horizon_len=1)
-    val_dataset = TimesFMTimeSeriesDataset(close_prices[split_idx:], context_len=context_len, horizon_len=1)
+    train_dataset = TimesFMTimeSeriesDataset(close_prices[:split_idx], context_len=effective_context_len, horizon_len=1)
+    val_dataset = TimesFMTimeSeriesDataset(close_prices[split_idx:], context_len=effective_context_len, horizon_len=1)
+
+    if len(train_dataset) == 0 or len(val_dataset) == 0:
+        raise ValueError(f"Dataset trop petit ({len(close_prices)} bougies). Veuillez augmenter --days (ex: --days 60).")
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    logger.info(f"📊 Dataset configuré : {len(train_dataset)} échantillons Train | {len(val_dataset)} échantillons Validation.")
+    logger.info(f"📊 Dataset configuré : {len(train_dataset)} échantillons Train | {len(val_dataset)} échantillons Validation (Context: {effective_context_len}).")
 
     model = None
     if HAS_TIMESFM and TimesFmClass is not None:
         try:
             logger.info("🧠 Chargement de Google TimesFM 1.0 (200M)...")
             tfm = TimesFmClass(
-                context_len=context_len, horizon_len=1, input_patch_len=32,
+                context_len=effective_context_len, horizon_len=1, input_patch_len=32,
                 output_patch_len=128, num_layers=20, model_dims=1280,
                 backend="gpu" if device.type == "cuda" else "cpu"
             )
@@ -182,7 +196,7 @@ def train(
 
     if model is None:
         logger.info("⚡ Utilisation du PyTorch Time-Series Transformer Engine (Backbone TimesFM)...")
-        model = PyTorchTimesFMModel(context_len=context_len, d_model=256, nhead=8, num_layers=4)
+        model = PyTorchTimesFMModel(context_len=effective_context_len, d_model=256, nhead=8, num_layers=4)
 
     os.makedirs(output_dir, exist_ok=True)
     save_path = os.path.join(output_dir, "timesfm_eth_finetuned.pt")
@@ -195,7 +209,7 @@ def train(
     best_val_loss = float('inf')
     patience_counter = 0
 
-    logger.info(f"\n=================== DÉBUT DU FINE-TUNING (MAX {epochs} ÉPOQUES - PATIENCE {patience}) ===================")
+    logger.info(f"\n=================== DÉBUT DU FINE-TUNING ({timeframe.upper()} | MAX {epochs} ÉPOQUES) ===================")
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -219,7 +233,6 @@ def train(
         scheduler.step()
         train_loss /= len(train_loader)
 
-        # Évaluation Validation
         model.eval()
         val_loss = 0.0
         correct_direction = 0
@@ -242,10 +255,9 @@ def train(
                 correct_direction += direction_match.sum()
                 total_eval += len(direction_match)
 
-        val_loss /= len(val_loader)
+        val_loss /= max(1, len(val_loader))
         accuracy_pct = (correct_direction / total_eval) * 100.0 if total_eval > 0 else 0.0
 
-        # Logique d'Early Stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
@@ -259,7 +271,6 @@ def train(
 
         if patience_counter >= patience:
             logger.info(f"\n🛑 EARLY STOPPING DÉCLENCHÉ ! Aucune amélioration de la Val Loss depuis {patience} époques consécutives.")
-            logger.info(f"Arrêt préventif à l'époque {epoch} pour éviter le sur-apprentissage.")
             break
 
     logger.info(f"===========================================================================")
@@ -267,9 +278,10 @@ def train(
     logger.info(f"💾 Poids optimaux conservés dans : {save_path}\n")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fine-Tuning TimesFM ETH 1h")
+    parser = argparse.ArgumentParser(description="Fine-Tuning TimesFM ETH 5m/1h")
     parser.add_argument("--symbol", type=str, default="ETH/USDT")
-    parser.add_argument("--days", type=int, default=730, help="Jours d'historique (730d = 2 ans)")
+    parser.add_argument("--timeframe", type=str, default="5m", help="Timeframe (5m ou 1h)")
+    parser.add_argument("--days", type=int, default=60, help="Jours d'historique (60d en 5m = ~17 280 bougies)")
     parser.add_argument("--epochs", type=int, default=30, help="Nombre d'époques max")
     parser.add_argument("--patience", type=int, default=5, help="Patience d'Early Stopping")
     parser.add_argument("--batch_size", type=int, default=32, help="Taille de batch")
@@ -279,6 +291,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     train(
         symbol=args.symbol,
+        timeframe=args.timeframe,
         days_back=args.days,
         epochs=args.epochs,
         patience=args.patience,
