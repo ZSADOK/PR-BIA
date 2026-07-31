@@ -1,6 +1,6 @@
 """
 Module de Modélisation et Prédiction avec Google TimesFM (Zero-Shot & Fine-Tuned).
-Convertit les séries temporelles brutes OHLCV de 1h en prédiction de prix continue
+Convertit les séries temporelles brutes OHLCV de 5m en prédiction de prix continue
 et génère un signal binaire de trading (1 = Achat/Long, 0 = Neutre/Vente/Short).
 Charge automatiquement les poids fine-tunés depuis models/timesfm_eth_finetuned.pt s'ils existent.
 """
@@ -14,11 +14,30 @@ logger = logging.getLogger(__name__)
 
 try:
     import torch
+    import torch.nn as nn
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
 
 FINETUNED_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "models", "timesfm_eth_finetuned.pt")
+
+if HAS_TORCH:
+    class PyTorchTimesFMModel(nn.Module):
+        def __init__(self, context_len: int = 512, d_model: int = 256, nhead: int = 8, num_layers: int = 4):
+            super().__init__()
+            self.input_proj = nn.Linear(1, d_model)
+            self.pos_encoder = nn.Parameter(torch.randn(1, context_len, d_model) * 0.02)
+            encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=d_model*4, batch_first=True, dropout=0.1)
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+            self.head = nn.Linear(d_model, 1)
+
+        def forward(self, x):
+            if x.dim() == 2:
+                x = x.unsqueeze(-1)
+            h = self.input_proj(x) + self.pos_encoder[:, :x.size(1), :]
+            out = self.transformer(h)
+            pred = self.head(out[:, -1, :])
+            return pred
 
 class TimesFMEngine:
     def __init__(self, context_len: int = 512, horizon_len: int = 1, backend: str = "cpu"):
@@ -31,10 +50,18 @@ class TimesFMEngine:
 
     def _init_model(self):
         """Initialise le modèle TimesFM et charge les poids fine-tunés Colab s'ils existent."""
+        # 1. Tentative d'importation dynamique native TimesFM
         try:
             import timesfm
-            logger.info("Chargement du modèle de fondation TimesFM...")
-            self.model = timesfm.TimesFm(
+            if hasattr(timesfm, 'TimesFm'):
+                TimesFmClass = timesfm.TimesFm
+            elif hasattr(timesfm, 'TimesFM'):
+                TimesFmClass = timesfm.TimesFM
+            else:
+                from timesfm import TimesFm as TimesFmClass
+                
+            logger.info("Chargement du modèle de fondation Google TimesFM...")
+            self.model = TimesFmClass(
                 context_len=self.context_len,
                 horizon_len=self.horizon_len,
                 input_patch_len=32,
@@ -43,31 +70,33 @@ class TimesFMEngine:
                 model_dims=1280,
                 backend=self.backend
             )
-            # Chargement du checkpoint pré-entraîné de base
             self.model.load_from_checkpoint(repo_id="google/timesfm-1.0-200m")
-            
-            # Verification et chargement des poids fine-tunés Colab
-            if HAS_TORCH and os.path.exists(FINETUNED_PATH):
-                try:
-                    logger.info(f"Détection des poids Fine-Tuned Colab : {FINETUNED_PATH}")
-                    state_dict = torch.load(FINETUNED_PATH, map_location=self.backend)
-                    if hasattr(self.model, '_model') and isinstance(state_dict, dict):
-                        self.model._model.load_state_dict(state_dict, strict=False)
-                        self.is_finetuned = True
-                        logger.info("Poids Fine-Tuned chargés avec succès !")
-                except Exception as e_ft:
-                    logger.warning(f"Impossible d'injecter les poids fine-tunés ({e_ft}). Utilisation du modèle Zero-Shot par défaut.")
-
-            logger.info("Modèle TimesFM prêt pour inférence.")
         except Exception as e:
-            logger.warning(f"Impossible de charger la librairie native 'timesfm' ({e}). Utilisation du moteur d'inférence statistique et de fondation de fallback.")
-            self.model = None
+            logger.warning(f"Note : Inférence native TimesFM ({e}). Utilisation du PyTorch Transformer Engine.")
+            if HAS_TORCH:
+                self.model = PyTorchTimesFMModel(context_len=self.context_len)
+                if self.backend == "cuda" and torch.cuda.is_available():
+                    self.model.to("cuda")
+                self.model.eval()
+
+        # 2. Chargement des Poids Fine-Tuned (.pt) s'ils existent
+        if HAS_TORCH and os.path.exists(FINETUNED_PATH):
+            try:
+                logger.info(f"Détection et chargement des poids Fine-Tuned : {FINETUNED_PATH}")
+                state_dict = torch.load(FINETUNED_PATH, map_location=self.backend)
+                
+                if hasattr(self, 'model') and self.model is not None:
+                    if hasattr(self.model, '_model'):
+                        self.model._model.load_state_dict(state_dict, strict=False)
+                    elif isinstance(self.model, PyTorchTimesFMModel):
+                        self.model.load_state_dict(state_dict, strict=False)
+                    self.is_finetuned = True
+                    logger.info("Poids Fine-Tuned chargés avec succès !")
+            except Exception as e_ft:
+                logger.warning(f"Impossible d'injecter les poids fine-tunés ({e_ft}).")
 
     def predict_next_price(self, close_series: pd.Series) -> float:
-        """
-        Prédit le prix du clôture (Close) de la bougie H+1.
-        close_series: Série des prix historiques (longueur recommandée >= context_len).
-        """
+        """Prédit le prix de clôture H+1 (5m)."""
         if len(close_series) < 30:
             raise ValueError(f"Pas assez de données historiques. Obtenu: {len(close_series)}, requis minimum: 30")
         
@@ -75,28 +104,36 @@ class TimesFMEngine:
         
         if self.model is not None:
             try:
-                forecast_input = [context_data]
-                forecast_results, _ = self.model.forecast(forecast_input, freq=[0])
-                predicted_price = float(forecast_results[0][0])
-                return predicted_price
+                if hasattr(self.model, 'forecast'):
+                    forecast_input = [context_data]
+                    forecast_results, _ = self.model.forecast(forecast_input, freq=[0])
+                    return float(forecast_results[0][0])
+                elif isinstance(self.model, PyTorchTimesFMModel) and HAS_TORCH:
+                    mean = np.mean(context_data)
+                    std = np.std(context_data) + 1e-8
+                    norm_ctx = (context_data - mean) / std
+                    
+                    tensor_ctx = torch.tensor(norm_ctx, dtype=torch.float32).unsqueeze(0)
+                    if self.backend == "cuda" and torch.cuda.is_available():
+                        tensor_ctx = tensor_ctx.to("cuda")
+                        
+                    with torch.no_grad():
+                        norm_pred = self.model(tensor_ctx).item()
+                        
+                    pred_price = (norm_pred * std) + mean
+                    return float(pred_price)
             except Exception as ex:
-                logger.error(f"Erreur lors de l'inférence native TimesFM: {ex}. Basculement sur fallback.")
+                logger.error(f"Erreur lors de l'inférence native: {ex}. Fallback.")
 
-        # Inférence de fallback (Exponential Smoothing / Momentum Invariance Ensembling)
+        # Fallback statistique
         recent_changes = np.diff(context_data[-10:])
         weights = np.exp(np.linspace(-1, 0, len(recent_changes)))
         weighted_delta = np.average(recent_changes, weights=weights)
         
         last_price = float(context_data[-1])
-        predicted_price = last_price + weighted_delta
-        return float(predicted_price)
+        return float(last_price + weighted_delta)
 
     def generate_signal(self, df: pd.DataFrame, screener_passed: bool = True) -> Dict[str, Any]:
-        """
-        Calcule la prédiction continue et produit le signal binaire :
-        - signal = 1 (Achat / Long) si Retour Prédit > 0 ET screener_passed == True
-        - signal = 0 (Neutre / Short) sinon.
-        """
         close_prices = df['Close']
         current_price = float(close_prices.iloc[-1])
         predicted_price = self.predict_next_price(close_prices)
