@@ -1,7 +1,7 @@
 """
 Module de Modélisation et Prédiction avec Google TimesFM (Zero-Shot & Fine-Tuned).
 Convertit les séries temporelles brutes OHLCV de 5m en prédiction de prix continue.
-Securisé avec inférence vectorisée par batchs pour éliminer 100% des risques de crash/segfault macOS.
+Securisé avec inférence par micro-batchs vectorisés (chunk_size=128) pour vitesse maximale sans blocage CPU.
 """
 import os
 import numpy as np
@@ -99,39 +99,42 @@ class TimesFMEngine:
         last_price = float(context_data[-1])
         return float(last_price + weighted_delta)
 
-    def predict_batch_prices(self, windows_list: List[np.ndarray]) -> np.ndarray:
+    def predict_batch_prices(self, windows_list: List[np.ndarray], chunk_size: int = 128) -> np.ndarray:
         """
-        Exécute l'inférence PyTorch de manière vectorisée par BATCH 2D (N_windows, context_len).
-        Évite 100% des boucles Python répétitives et prévient tout crash C++/segfault.
+        Exécute l'inférence PyTorch vectorisée par micro-batchs de 128 pour vitesse et stabilité maximales.
         """
         if not windows_list:
             return np.array([])
 
-        N = len(windows_list)
-        C = len(windows_list[0])
-        
-        # Matrix stack 2D
+        all_preds = []
         batch_matrix = np.vstack(windows_list).astype(np.float32)
+        total_samples = len(batch_matrix)
         
-        means = np.mean(batch_matrix, axis=1, keepdims=True)
-        stds = np.std(batch_matrix, axis=1, keepdims=True) + 1e-8
-        
-        norm_batch = (batch_matrix - means) / stds
-        
-        if self.model is not None and HAS_TORCH and isinstance(self.model, PyTorchTimesFMModel):
-            try:
-                tensor_batch = torch.tensor(norm_batch, dtype=torch.float32)
-                with torch.no_grad():
-                    norm_preds = self.model(tensor_batch).detach().cpu().numpy().reshape(-1)
-                pred_prices = (norm_preds * stds.squeeze()) + means.squeeze()
-                return pred_prices.astype(np.float64)
-            except Exception as ex:
-                logger.error(f"Erreur batch PyTorch: {ex}. Basculement sur méthode statistique.")
-                
-        # Fallback statistique vectorisé
-        last_prices = batch_matrix[:, -1]
-        deltas = batch_matrix[:, -1] - batch_matrix[:, -5]
-        return (last_prices + (deltas * 0.1)).astype(np.float64)
+        for start_idx in range(0, total_samples, chunk_size):
+            end_idx = min(start_idx + chunk_size, total_samples)
+            sub_matrix = batch_matrix[start_idx:end_idx]
+            
+            means = np.mean(sub_matrix, axis=1, keepdims=True)
+            stds = np.std(sub_matrix, axis=1, keepdims=True) + 1e-8
+            norm_sub = (sub_matrix - means) / stds
+            
+            if self.model is not None and HAS_TORCH and isinstance(self.model, PyTorchTimesFMModel):
+                try:
+                    tensor_sub = torch.tensor(norm_sub, dtype=torch.float32)
+                    with torch.no_grad():
+                        norm_preds = self.model(tensor_sub).detach().cpu().numpy().reshape(-1)
+                    sub_preds = (norm_preds * stds.squeeze()) + means.squeeze()
+                    all_preds.extend(sub_preds)
+                    continue
+                except Exception as ex:
+                    logger.error(f"Erreur chunk PyTorch [{start_idx}:{end_idx}]: {ex}")
+
+            # Fallback
+            last_prices = sub_matrix[:, -1]
+            deltas = sub_matrix[:, -1] - sub_matrix[:, -5]
+            all_preds.extend(last_prices + (deltas * 0.1))
+
+        return np.array(all_preds, dtype=np.float64)
 
     def generate_signal(self, df: pd.DataFrame, screener_passed: bool = True) -> Dict[str, Any]:
         close_prices = df['Close']
