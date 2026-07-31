@@ -23,6 +23,8 @@ venv_python = os.path.join(base_dir, ".venv", "bin", "python3")
 if os.path.exists(venv_python) and os.path.abspath(sys.executable) != os.path.abspath(venv_python):
     os.execv(venv_python, [venv_python] + sys.argv)
 
+import time
+import argparse
 import logging
 import pandas as pd
 from dotenv import load_dotenv
@@ -133,7 +135,21 @@ def run_trading_cycle(capital: float = 100000.0) -> dict:
     }
 
 if __name__ == "__main__":
-    res = run_trading_cycle()
-    print("\n" + "="*88)
-    print("=== FIN DU CYCLE DE TRADING ETH 5M ALPACA ===")
-    print("="*88)
+    parser = argparse.ArgumentParser(description="Bot de Trading TimesFM ETH 5m")
+    parser.add_argument("--loop", action="store_true", help="Exécute le bot en boucle continue toutes les 5 minutes (300s)")
+    args = parser.parse_args()
+    
+    if args.loop:
+        logger.info("🚀 DÉMARRAGE DU BOT EN MODE CONTINU 24/7 (Cycle toutes les 5 minutes)...")
+        try:
+            while True:
+                run_trading_cycle()
+                logger.info("⏳ En attente de 5 minutes (300s) avant la prochaine bougie...")
+                time.sleep(300)
+        except KeyboardInterrupt:
+            logger.info("🛑 Arrêt manuel du bot.")
+    else:
+        res = run_trading_cycle()
+        print("\n" + "="*88)
+        print("=== FIN DU CYCLE DE TRADING ETH 5M ALPACA ===")
+        print("="*88)
