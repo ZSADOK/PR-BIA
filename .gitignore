@@ -10,5 +10,4 @@ models/*.pkl
 data/raw/
 data/processed/
 data/*.json
-.DS_Store
-
+.DS_Storecree 
