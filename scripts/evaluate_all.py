@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 Script de Rapport et d'Évaluation Globale Tout-En-Un (Master Evaluation Suite).
 Inférence PyTorch par BATCH 2D vectorisée (Zero Crash, Zero Segfault).
