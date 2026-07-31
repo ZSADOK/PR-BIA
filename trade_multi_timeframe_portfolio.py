@@ -171,34 +171,26 @@ def update_tf_history(tf: str, current_price: float, confidence: float, action: 
                 
                 entry_conf = float(entry.get("confidence", entry.get("Confiance", 50.0)))
                 entry_act = entry.get("action", "HOLD")
-                entry_notional = float(entry.get("allocated_notional", allocated_notional))
+                entry_notional = float(entry.get("allocated_notional", 0.0))
                 
                 # Calcul du Gain/Perte Réalisé en $
                 if entry_act == "BUY":
                     trade_pnl_dollar = entry_notional * (chg_pct / 100.0) if entry_notional > 0 else 0.0
+                    actual_up = current_price > entry_price
+                    entry["outcome"] = "🏆 RAISON" if actual_up else "❌ ERREUR"
                 else:
                     trade_pnl_dollar = 0.0
+                    actual_down_or_flat = current_price <= entry_price
+                    entry["outcome"] = "🏆 RAISON" if actual_down_or_flat else "❌ ERREUR"
 
                 entry["pnl_dollar"] = trade_pnl_dollar
-
-                predicted_up = entry_conf >= 58.0
-                actual_up = current_price > entry_price
-                
-                if (predicted_up and actual_up) or (not predicted_up and not actual_up):
-                    entry["outcome"] = "🏆 RAISON"
-                else:
-                    entry["outcome"] = "❌ ERREUR"
                 entry["status"] = "COMPLETED"
 
-    # 2. Dédoublonnage sur le même créneau
+    # 2. Dédoublonnage strict : verrouiller la première prédiction de la bougie
     already_exists = False
     for entry in history:
         if entry.get("timestamp", "").startswith(current_key[:15]):
             already_exists = True
-            entry["confidence"] = confidence
-            entry["action"] = action
-            if allocated_notional > 0:
-                entry["allocated_notional"] = allocated_notional
             break
 
     if not already_exists:
