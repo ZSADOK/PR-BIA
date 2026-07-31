@@ -450,6 +450,8 @@ def render_multi_tf_dashboard():
     table.add_column("Sparkline", style="bold yellow", justify="center", no_wrap=True)
     table.add_column("Part", style="bold yellow", justify="center", no_wrap=True)
     table.add_column("Plafond ($)", style="bold white", justify="right", no_wrap=True)
+    table.add_column("PnL Session ($)", style="bold white", justify="right", no_wrap=True)
+    table.add_column("Ratio WinRate", style="bold yellow", justify="center", no_wrap=True)
     table.add_column("Confiance", style="bold cyan", justify="right", no_wrap=True)
     table.add_column("Signal SOTA", style="bold white", justify="center", no_wrap=True)
     table.add_column("Kelly ($)", style="bold green", justify="right", no_wrap=True)
@@ -470,6 +472,12 @@ def render_multi_tf_dashboard():
             notional_str = f"${st['allocated_notional']:,.0f}" if st['allocated_notional'] > 0 else "0$"
             cd_str = f"{st['next_countdown']}s"
             
+            st_tf = tf_stats[tf]
+            pnl_tf_val = st_tf["pnl"]
+            pnl_tf_style = "bold green" if pnl_tf_val >= 0 else "bold red"
+            pnl_tf_str = f"[{pnl_tf_style}]${pnl_tf_val:+,.2f}[/{pnl_tf_style}]"
+            wr_tf_str = f"{st_tf['winrate']:.0f}% ({st_tf['wins']}/{st_tf['completed']})"
+
             tf_short_name = "1h (Swing)" if tf == "1h" else "5m (Intraday)" if tf == "5m" else "1m (Scalping)"
             
             table.add_row(
@@ -480,6 +488,8 @@ def render_multi_tf_dashboard():
                 spark_str,
                 f"{cfg['budget_pct']*100:.0f}%",
                 f"${max_b:,.0f}",
+                pnl_tf_str,
+                wr_tf_str,
                 conf_str,
                 sig_str,
                 notional_str,
