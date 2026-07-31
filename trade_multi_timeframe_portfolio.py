@@ -141,7 +141,7 @@ def load_residual_model(tf: str):
             return None, [], ckpt, False
     return None, [], ckpt, False
 
-def update_tf_history(tf: str, current_price: float, confidence: float, action: str):
+def update_tf_history(tf: str, current_price: float, confidence: float, action: str, allocated_notional: float = 0.0):
     cfg = TIMEFRAME_CONFIGS[tf]
     history = load_tf_history(cfg["history_file"])
     now_dt = datetime.now()
@@ -170,6 +170,17 @@ def update_tf_history(tf: str, current_price: float, confidence: float, action: 
                 entry["change_pct"] = chg_pct
                 
                 entry_conf = float(entry.get("confidence", entry.get("Confiance", 50.0)))
+                entry_act = entry.get("action", "HOLD")
+                entry_notional = float(entry.get("allocated_notional", allocated_notional))
+                
+                # Calcul du Gain/Perte Réalisé en $
+                if entry_act == "BUY":
+                    trade_pnl_dollar = entry_notional * (chg_pct / 100.0) if entry_notional > 0 else 0.0
+                else:
+                    trade_pnl_dollar = 0.0
+
+                entry["pnl_dollar"] = trade_pnl_dollar
+
                 predicted_up = entry_conf >= 58.0
                 actual_up = current_price > entry_price
                 
@@ -186,6 +197,8 @@ def update_tf_history(tf: str, current_price: float, confidence: float, action: 
             already_exists = True
             entry["confidence"] = confidence
             entry["action"] = action
+            if allocated_notional > 0:
+                entry["allocated_notional"] = allocated_notional
             break
 
     if not already_exists:
@@ -195,9 +208,11 @@ def update_tf_history(tf: str, current_price: float, confidence: float, action: 
             "entry_price": current_price,
             "confidence": confidence,
             "action": action,
+            "allocated_notional": allocated_notional,
             "exit_price": None,
             "exit_time": None,
             "change_pct": 0.0,
+            "pnl_dollar": 0.0,
             "outcome": f"⌛ EN COURS (+{tf})",
             "status": "PENDING"
         }
@@ -308,7 +323,7 @@ def timeframe_worker(tf: str):
             sparkline_str = make_sparkline(close_vals, length=8)
 
             # 5. Mise à jour de l'historique
-            update_tf_history(tf, current_price, confidence, action)
+            update_tf_history(tf, current_price, confidence, action, allocated_notional)
 
             # 6. Mise à jour de l'état partagé pour la UI Rich
             with STATE_LOCK:
@@ -438,7 +453,7 @@ def render_multi_tf_dashboard():
 
     layout["main"].update(Panel(table, style="blue"))
 
-    # 3. Journal de Suivi Combiné
+    # 3. Journal de Suivi Combiné avec PnL Réalisé ($ et %)
     combined_history = []
     for tf, cfg in TIMEFRAME_CONFIGS.items():
         h = load_tf_history(cfg["history_file"])
@@ -448,15 +463,16 @@ def render_multi_tf_dashboard():
 
     combined_history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
-    j_table = Table(title="📜 JOURNAL COMBINÉ DES PRÉDICTIONS INTER-TIMEFRAMES", expand=True)
-    j_table.add_column("Horizon", style="bold cyan", justify="center")
-    j_table.add_column("Horodatage", style="dim", justify="left")
-    j_table.add_column("Prix Entrée", style="white", justify="right")
-    j_table.add_column("Confiance", style="cyan", justify="right")
-    j_table.add_column("Action", style="bold white", justify="center")
-    j_table.add_column("Prix Clôture", style="white", justify="right")
-    j_table.add_column("Variation", style="bold white", justify="right")
-    j_table.add_column("Résultat IA", style="bold yellow", justify="center")
+    j_table = Table(title="📜 JOURNAL COMBINÉ DES PRÉDICTIONS INTER-TIMEFRAMES (DÉTAILS PnL $ & %)", expand=True)
+    j_table.add_column("Horizon", style="bold cyan", justify="center", no_wrap=True)
+    j_table.add_column("Horodatage", style="dim", justify="left", no_wrap=True)
+    j_table.add_column("Prix Entrée", style="white", justify="right", no_wrap=True)
+    j_table.add_column("Confiance", style="cyan", justify="right", no_wrap=True)
+    j_table.add_column("Action", style="bold white", justify="center", no_wrap=True)
+    j_table.add_column("Prix Clôture", style="white", justify="right", no_wrap=True)
+    j_table.add_column("Variation", style="bold white", justify="right", no_wrap=True)
+    j_table.add_column("Gain/Perte ($)", style="bold white", justify="right", no_wrap=True)
+    j_table.add_column("Résultat IA", style="bold yellow", justify="center", no_wrap=True)
 
     for item in combined_history[:7]:
         tf_code = item.get("tf_name", "").upper()
@@ -466,10 +482,18 @@ def render_multi_tf_dashboard():
         act = item.get("action", "HOLD")
         p_out = item.get("exit_price")
         chg = item.get("change_pct", 0.0)
+        pnl_dlr = item.get("pnl_dollar", 0.0)
         out = item.get("outcome", "⌛ EN COURS")
 
         p_out_str = f"${p_out:,.2f}" if p_out else "---"
-        chg_str = f"{chg:+.2f}%" if p_out else "---"
+        chg_style = "bold green" if chg >= 0 else "bold red"
+        chg_str = f"[{chg_style}]{chg:+.2f}%[/{chg_style}]" if p_out else "---"
+
+        if p_out:
+            pnl_style = "bold green" if pnl_dlr >= 0 else "bold red"
+            pnl_str = f"[{pnl_style}]${pnl_dlr:+,.2f}[/{pnl_style}]"
+        else:
+            pnl_str = "---"
 
         if "RAISON" in out:
             out_style = "[bold green]🏆 RAISON[/bold green]"
@@ -478,12 +502,12 @@ def render_multi_tf_dashboard():
         else:
             out_style = f"[bold yellow]⌛ EN COURS (+{tf_code})[/bold yellow]"
 
-        j_table.add_row(tf_code, t_str, f"${p_in:,.2f}", f"{conf:.1f}%", act, p_out_str, chg_str, out_style)
+        j_table.add_row(tf_code, t_str, f"${p_in:,.2f}", f"{conf:.1f}%", act, p_out_str, chg_str, pnl_str, out_style)
 
     layout["journal"].update(Panel(j_table, style="blue"))
 
     layout["footer"].update(Panel(
-        "[bold green]✔ Moteur Multi-Horizon 25.8M Actif[/bold green] | [yellow]Threads 1h (30%), 5m (20%), 1m (10%) synchronisés[/yellow] | [white]Appuyez sur Ctrl+C pour quitter[/white]",
+        "[bold green]✔ Moteur Multi-Horizon 25.8M Actif (Rafraîchissement 4Hz)[/bold green] | [yellow]Threads 1h (30%), 5m (20%), 1m (10%) synchronisés[/yellow] | [white]Appuyez sur Ctrl+C pour quitter[/white]",
         style="bold white on black"
     ))
 
@@ -521,12 +545,12 @@ def main():
         t.start()
         time.sleep(1.0)
 
-    # Boucle de rendu UI Rich en direct
-    with Live(render_multi_tf_dashboard(), refresh_per_second=1, console=console) as live:
+    # Boucle de rendu UI Rich en direct (Rafraîchissement ultra-rapide 4Hz)
+    with Live(render_multi_tf_dashboard(), refresh_per_second=4, console=console) as live:
         try:
             while True:
                 live.update(render_multi_tf_dashboard())
-                time.sleep(1.0)
+                time.sleep(0.25)
         except KeyboardInterrupt:
             console.print("\n[yellow]Arrêt du Bot Multi-Horizon...[/yellow]")
 
