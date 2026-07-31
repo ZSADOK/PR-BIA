@@ -376,8 +376,8 @@ def render_multi_tf_dashboard():
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=4),
-        Layout(name="main", size=10),
-        Layout(name="journal", size=10),
+        Layout(name="main", size=8),
+        Layout(name="journal", size=18),
         Layout(name="footer", size=3)
     )
 
@@ -488,9 +488,9 @@ def render_multi_tf_dashboard():
 
     layout["main"].update(Panel(table, style="blue"))
 
-    # 4. 3 Tableaux Dédiés par Horizon avec PnL Cumulé ($) & WinRate Ratio
+    # 4. 3 Tableaux Dédiés Empilés Verticalement par Horizon avec PnL Cumulé ($) & WinRate Ratio
     journal_layout = Layout()
-    journal_layout.split_row(
+    journal_layout.split_column(
         Layout(name="j_1h", ratio=1),
         Layout(name="j_5m", ratio=1),
         Layout(name="j_1m", ratio=1)
@@ -504,26 +504,34 @@ def render_multi_tf_dashboard():
         st_tf = tf_stats[tf_key]
         p_style = "bold green" if st_tf["pnl"] >= 0 else "bold red"
         pnl_title_str = f"[{p_style}]${st_tf['pnl']:+,.2f}[/{p_style}]"
-        wr_title_str = f"{st_tf['winrate']:.0f}% ({st_tf['wins']}/{st_tf['completed']})"
+        wr_title_str = f"{st_tf['winrate']:.0f}% ({st_tf['wins']}/{st_tf['completed']} Gagnés)"
 
-        tf_label = "1H" if tf_key == "1h" else "5M" if tf_key == "5m" else "1M"
-        title_text = f"📜 {tf_label}: {pnl_title_str} | Ratio: {wr_title_str}"
+        tf_full = "1H (SWING)" if tf_key == "1h" else "5M (INTRADAY)" if tf_key == "5m" else "1M (SCALPING)"
+        title_text = f"📜 JOURNAL {tf_full} | PnL Cumulé: {pnl_title_str} | WinRate: {wr_title_str}"
 
         j_table = Table(title=title_text, expand=True)
-        j_table.add_column("Heure", style="dim", justify="left", no_wrap=True)
-        j_table.add_column("Entrée", style="white", justify="right", no_wrap=True)
-        j_table.add_column("Signal", style="bold white", justify="center", no_wrap=True)
-        j_table.add_column("PnL ($)", style="bold white", justify="right", no_wrap=True)
-        j_table.add_column("Résultat", style="bold yellow", justify="center", no_wrap=True)
+        j_table.add_column("Horodatage", style="dim", justify="left", no_wrap=True)
+        j_table.add_column("Prix Entrée", style="white", justify="right", no_wrap=True)
+        j_table.add_column("Confiance", style="cyan", justify="right", no_wrap=True)
+        j_table.add_column("Signal SOTA", style="bold white", justify="center", no_wrap=True)
+        j_table.add_column("Prix Clôture", style="white", justify="right", no_wrap=True)
+        j_table.add_column("Variation", style="bold white", justify="right", no_wrap=True)
+        j_table.add_column("Gain/Perte ($)", style="bold white", justify="right", no_wrap=True)
+        j_table.add_column("Résultat IA", style="bold yellow", justify="center", no_wrap=True)
 
-        for item in history[:5]:
-            t_str = item.get("timestamp", "").split(" ")[1] if " " in item.get("timestamp", "") else item.get("timestamp", "")
+        for item in history[:3]:
+            t_str = item.get("timestamp", "")
             p_in = item.get("entry_price", 0.0)
             conf = item.get("confidence", 50.0)
             act = item.get("action", "HOLD")
             p_out = item.get("exit_price")
+            chg = item.get("change_pct", 0.0)
             pnl_dlr = item.get("pnl_dollar", 0.0)
             out = item.get("outcome", "⌛ EN COURS")
+
+            p_out_str = f"${p_out:,.2f}" if p_out else "---"
+            chg_style = "bold green" if chg >= 0 else "bold red"
+            chg_str = f"[{chg_style}]{chg:+.2f}%[/{chg_style}]" if p_out else "---"
 
             if p_out:
                 pnl_style = "bold green" if pnl_dlr >= 0 else "bold red"
@@ -538,9 +546,9 @@ def render_multi_tf_dashboard():
             else:
                 out_style = f"[bold yellow]⌛ EN COURS[/bold yellow]"
 
-            act_str = f"[green]BUY ({conf:.0f}%)[/green]" if act == "BUY" else f"[yellow]{act}[/yellow]"
+            act_str = f"[bold green]ACHAT ({conf:.0f}%)[/bold green]" if act == "BUY" else f"[bold yellow]{act}[/bold yellow]"
 
-            j_table.add_row(t_str, f"${p_in:,.0f}", act_str, pnl_str, out_style)
+            j_table.add_row(t_str, f"${p_in:,.2f}", f"{conf:.1f}%", act_str, p_out_str, chg_str, pnl_str, out_style)
 
         journal_layout[tf_name].update(Panel(j_table, style="blue"))
 
