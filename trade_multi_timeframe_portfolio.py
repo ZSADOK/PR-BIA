@@ -333,8 +333,8 @@ def render_multi_tf_dashboard():
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=4),
-        Layout(name="main", size=9),
-        Layout(name="journal", size=11),
+        Layout(name="main", size=10),
+        Layout(name="journal", size=10),
         Layout(name="footer", size=3)
     )
 
@@ -386,19 +386,19 @@ def render_multi_tf_dashboard():
 
     layout["header"].update(Panel(header_text, style="bold white on blue"))
 
-    # 2. Table Synthèse des 3 Horizons Temporels
+    # 2. Table Synthèse des 3 Horizons Temporels (no_wrap=True pour empêcher tout retour à la ligne)
     table = Table(title="📊 PORTFEUILLE ENSEMBLE MULTI-HORIZON (1H: 30% | 5M: 20% | 1M: 10% | CASH SAFETY: 40%)", expand=True)
-    table.add_column("Horizon", style="cyan", justify="left")
-    table.add_column("Fichier Modèle", style="dim cyan", justify="left")
-    table.add_column("Prix BTC", style="bold white", justify="right")
-    table.add_column("Var %", style="bold white", justify="center")
-    table.add_column("Sparkline", style="bold yellow", justify="center")
-    table.add_column("Part", style="bold yellow", justify="center")
-    table.add_column("Plafond ($)", style="bold white", justify="right")
-    table.add_column("Confiance", style="bold cyan", justify="right")
-    table.add_column("Signal SOTA", style="bold white", justify="center")
-    table.add_column("Kelly ($)", style="bold green", justify="right")
-    table.add_column("Scan", style="dim", justify="right")
+    table.add_column("Horizon", style="cyan", justify="left", no_wrap=True)
+    table.add_column("Fichier Modèle", style="dim cyan", justify="left", no_wrap=True)
+    table.add_column("Prix BTC", style="bold white", justify="right", no_wrap=True)
+    table.add_column("Var %", style="bold white", justify="center", no_wrap=True)
+    table.add_column("Sparkline", style="bold yellow", justify="center", no_wrap=True)
+    table.add_column("Part", style="bold yellow", justify="center", no_wrap=True)
+    table.add_column("Plafond ($)", style="bold white", justify="right", no_wrap=True)
+    table.add_column("Confiance", style="bold cyan", justify="right", no_wrap=True)
+    table.add_column("Signal SOTA", style="bold white", justify="center", no_wrap=True)
+    table.add_column("Kelly ($)", style="bold green", justify="right", no_wrap=True)
+    table.add_column("Scan", style="dim", justify="right", no_wrap=True)
 
     with STATE_LOCK:
         for tf, cfg in TIMEFRAME_CONFIGS.items():
