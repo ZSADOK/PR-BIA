@@ -54,20 +54,22 @@ def save_history(history):
     except Exception:
         pass
 
-def load_trained_residual_transformer():
-    if os.path.exists(CHECKPOINT_PATH):
-        raw_sample = yf.download(SINGLE_TICKER, period="30d", interval="1h", progress=False)
-        feat_df = apply_triple_barrier_and_features(raw_sample, apply_prescreen=False)
+def load_trained_residual_transformer(interval: str = "5m"):
+    ckpt_path = f"models/tabfm_residual_BTC_USD_{interval}.pt" if os.path.exists(f"models/tabfm_residual_BTC_USD_{interval}.pt") else "models/tabfm_residual_BTC_USD.pt"
+    if os.path.exists(ckpt_path):
+        period = "30d"
+        raw_sample = yf.download(SINGLE_TICKER, period=period, interval=interval, progress=False)
+        feat_df = apply_triple_barrier_and_features(raw_sample, apply_prescreen=False, interval=interval)
         feat_cols = [c for c in feat_df.columns if c not in ["target_triple_barrier", "future_return", "sma50", "sma200"]]
         
         model = MultiAssetResidualTransformer(len(feat_cols)).to(device)
-        model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=device))
+        model.load_state_dict(torch.load(ckpt_path, map_location=device))
         model.eval()
-        return model, feat_cols, True
+        return model, feat_cols, ckpt_path, True
     else:
-        return None, [], False
+        return None, [], ckpt_path, False
 
-residual_model, feature_cols, is_trained = load_trained_residual_transformer()
+residual_model, feature_cols, CHECKPOINT_PATH, is_trained = load_trained_residual_transformer()
 
 def update_and_verify_hourly_history(current_price: float, current_confidence: float, action: str):
     """
@@ -164,8 +166,9 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
     except Exception:
         total_equity, cash, pnl, pnl_pct = 100000.0, 100000.0, 0.0, 0.0
 
-    # Données Temps Réel BTC-USD
-    raw_data = yf.download(SINGLE_TICKER, period="30d", interval="1h", progress=False)
+    # Données Temps Réel BTC-USD (5m ou 1h selon le checkpoint chargé)
+    current_interval = "5m" if "5m" in CHECKPOINT_PATH else "1h"
+    raw_data = yf.download(SINGLE_TICKER, period="30d", interval=current_interval, progress=False)
     close_series = raw_data["Close"].iloc[:, 0] if isinstance(raw_data["Close"], pd.DataFrame) else raw_data["Close"]
     close_vals = close_series.dropna().values.flatten()
     current_price = close_vals[-1]
@@ -192,7 +195,7 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
         pos_str = "[yellow]NON CONNECTÉ ALPACA[/yellow]"
 
     if is_trained and residual_model is not None:
-        feat_df = apply_triple_barrier_and_features(raw_data, apply_prescreen=False)
+        feat_df = apply_triple_barrier_and_features(raw_data, apply_prescreen=False, interval=current_interval)
         if not feat_df.empty:
             last_feat = feat_df[feature_cols].iloc[-1:]
             mean = feat_df[feature_cols].mean()
@@ -303,8 +306,8 @@ def main():
     if args.continuous:
         with Live(get_single_asset_live_panel(args.interval_sec), refresh_per_second=1, console=console) as live:
             while True:
-                start_t = time.time()
-                raw_data = yf.download(SINGLE_TICKER, period="30d", interval="1h", progress=False)
+                current_interval = "5m" if "5m" in CHECKPOINT_PATH else "1h"
+                raw_data = yf.download(SINGLE_TICKER, period="30d", interval=current_interval, progress=False)
                 close_series = raw_data["Close"].iloc[:, 0] if isinstance(raw_data["Close"], pd.DataFrame) else raw_data["Close"]
                 close_vals = close_series.dropna().values.flatten()
                 current_price = close_vals[-1]
@@ -313,7 +316,7 @@ def main():
                 action = "HOLD"
 
                 if is_trained and residual_model is not None:
-                    feat_df = apply_triple_barrier_and_features(raw_data, apply_prescreen=False)
+                    feat_df = apply_triple_barrier_and_features(raw_data, apply_prescreen=False, interval=current_interval)
                     if not feat_df.empty:
                         last_feat = feat_df[feature_cols].iloc[-1:]
                         mean = feat_df[feature_cols].mean()
