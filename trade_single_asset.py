@@ -72,46 +72,65 @@ residual_model, feature_cols, is_trained = load_trained_residual_transformer()
 def update_and_verify_hourly_history(current_price: float, current_confidence: float, action: str):
     """
     Vérifie les prédictions passées (1h plus tard) et enregistre le résultat (Raisons/Erreurs & PnL).
+    Dédoublonne les entrées sur la même heure et attend au moins 50 minutes avant de valider à H+1.
     """
     history = load_history()
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_dt = datetime.now()
+    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+    current_hour_key = now_dt.strftime("%Y-%m-%d %H:00")
 
-    # 1. Mettre à jour la dernière prédiction en attente si 1h s'est écoulée
+    # 1. Ne fermer une prédiction en attente que si au moins 50 minutes (~3000s) se sont écoulées
     for entry in history:
         if entry.get("status") == "PENDING":
-            entry_price = entry["entry_price"]
-            price_change_pct = ((current_price - entry_price) / entry_price) * 100.0
-            
-            entry["exit_price"] = current_price
-            entry["exit_time"] = now_str
-            entry["change_pct"] = price_change_pct
-            
-            # Vérifier si l'IA a eu raison
-            predicted_up = entry["confidence"] >= 58.0
-            actual_up = current_price > entry_price
-            
-            if (predicted_up and actual_up) or (not predicted_up and not actual_up):
-                entry["outcome"] = "🏆 RAISON"
-            else:
-                entry["outcome"] = "❌ ERREUR"
-                
-            entry["status"] = "COMPLETED"
+            entry_time_str = entry.get("timestamp", "")
+            try:
+                entry_dt = datetime.strptime(entry_time_str, "%Y-%m-%d %H:%M:%S")
+                elapsed_sec = (now_dt - entry_dt).total_seconds()
+            except Exception:
+                elapsed_sec = 3600.0
 
-    # 2. Ajouter la nouvelle prédiction de l'heure courante
-    new_entry = {
-        "timestamp": now_str,
-        "entry_price": current_price,
-        "confidence": current_confidence,
-        "action": action,
-        "exit_price": None,
-        "exit_time": None,
-        "change_pct": 0.0,
-        "outcome": "⌛ EN COURS (+1h)",
-        "status": "PENDING"
-    }
-    history.append(new_entry)
+            if elapsed_sec >= 3000:
+                entry_price = entry["entry_price"]
+                price_change_pct = ((current_price - entry_price) / entry_price) * 100.0
+                
+                entry["exit_price"] = current_price
+                entry["exit_time"] = now_str
+                entry["change_pct"] = price_change_pct
+                
+                predicted_up = entry["confidence"] >= 58.0
+                actual_up = current_price > entry_price
+                
+                if (predicted_up and actual_up) or (not predicted_up and not actual_up):
+                    entry["outcome"] = "🏆 RAISON"
+                else:
+                    entry["outcome"] = "❌ ERREUR"
+                    
+                entry["status"] = "COMPLETED"
+
+    # 2. Vérifier si une prédiction a déjà été enregistrée pour cette heure courante
+    already_exists = False
+    for entry in history:
+        e_time = entry.get("timestamp", "")
+        if e_time.startswith(current_hour_key):
+            already_exists = True
+            entry["confidence"] = current_confidence
+            entry["action"] = action
+            break
+
+    if not already_exists:
+        new_entry = {
+            "timestamp": now_str,
+            "entry_price": current_price,
+            "confidence": current_confidence,
+            "action": action,
+            "exit_price": None,
+            "exit_time": None,
+            "change_pct": 0.0,
+            "outcome": "⌛ EN COURS (+1h)",
+            "status": "PENDING"
+        }
+        history.append(new_entry)
     
-    # Conserver les 20 derniers trades pour la clarté
     if len(history) > 20:
         history = history[-20:]
         
