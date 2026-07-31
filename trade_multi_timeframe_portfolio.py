@@ -222,10 +222,23 @@ def timeframe_worker(tf: str):
 
             max_tf_budget = total_cash * cfg["budget_pct"]
 
-            # 2. Téléchargement des bougies
+            # 2. Téléchargement des bougies avec fallback de sécurité
             raw_data = yf.download(SINGLE_TICKER, period=cfg["period"], interval=cfg["interval"], progress=False)
+            if raw_data.empty or len(raw_data) < 10:
+                raw_data = yf.download(SINGLE_TICKER, period="5d", interval=cfg["interval"], progress=False)
+
+            if raw_data.empty:
+                with STATE_LOCK:
+                    LIVE_STATES[tf]["signal_text"] = "[yellow]ATTENTE FLUX FLOTTANT...[/yellow]"
+                time.sleep(3.0)
+                continue
+
             close_series = raw_data["Close"].iloc[:, 0] if isinstance(raw_data["Close"], pd.DataFrame) else raw_data["Close"]
             close_vals = close_series.dropna().values.flatten()
+            if len(close_vals) == 0:
+                time.sleep(3.0)
+                continue
+                
             current_price = close_vals[-1]
 
             confidence = 50.0
