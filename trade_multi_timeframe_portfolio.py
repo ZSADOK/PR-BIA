@@ -375,10 +375,10 @@ def timeframe_worker(tf: str):
 def render_multi_tf_dashboard():
     layout = Layout()
     layout.split_column(
-        Layout(name="header", size=4),
-        Layout(name="main", size=8),
-        Layout(name="journal", size=18),
-        Layout(name="footer", size=3)
+        Layout(name="header", size=3),
+        Layout(name="main", size=7),
+        Layout(name="journal", size=14),
+        Layout(name="footer", size=2)
     )
 
     # 1. Calcul des statistiques cumulées de session (1h, 5m, 1m & Global)
@@ -432,36 +432,32 @@ def render_multi_tf_dashboard():
 
     header_text = (
         f"[bold white]🏛️ PR-BIA MULTI-TIMEFRAME ENSEMBLE SYSTEM | BILAN DE SESSION D'EXÉCUTION CONTINU[/bold white]\n"
-        f"Prix BTC-USD: [bold yellow]${latest_price:,.2f}[/bold yellow] | "
+        f"Prix BTC: [bold yellow]${latest_price:,.2f}[/bold yellow] | "
         f"Var 5m: [{style_5m}]{var_5m_pct:+.2f}%[/{style_5m}] | Var 1h: [{style_1h}]{var_1h_pct:+.2f}%[/{style_1h}] | "
         f"Capital: [cyan]${total_equity:,.2f}[/cyan] | Cash: [green]${cash:,.2f}[/green] | "
-        f"PnL Cumulé: [{g_pnl_style}]${global_pnl:+,.2f}[/{g_pnl_style}] | "
-        f"Ratio Global: [bold yellow]{global_winrate:.1f}% ({global_wins}/{global_completed} Gagnés)[/bold yellow]"
+        f"PnL Session: [{g_pnl_style}]${global_pnl:+,.2f}[/{g_pnl_style}] | "
+        f"Ratio Global: [bold yellow]{global_winrate:.0f}% ({global_wins}/{global_completed})[/bold yellow]"
     )
 
     layout["header"].update(Panel(header_text, style="bold white on blue"))
 
-    # 3. Table Synthèse des 3 Horizons Temporels (no_wrap=True pour empêcher tout retour à la ligne)
+    # 3. Table Synthèse des 3 Horizons Temporels (Compacte 10 colonnes)
     table = Table(title="📊 PORTFEUILLE ENSEMBLE MULTI-HORIZON (1H: 30% | 5M: 20% | 1M: 10% | CASH SAFETY: 40%)", expand=True)
     table.add_column("Horizon", style="cyan", justify="left", no_wrap=True)
-    table.add_column("Fichier Modèle", style="dim cyan", justify="left", no_wrap=True)
     table.add_column("Prix BTC", style="bold white", justify="right", no_wrap=True)
     table.add_column("Var %", style="bold white", justify="center", no_wrap=True)
     table.add_column("Sparkline", style="bold yellow", justify="center", no_wrap=True)
-    table.add_column("Part", style="bold yellow", justify="center", no_wrap=True)
-    table.add_column("Plafond ($)", style="bold white", justify="right", no_wrap=True)
-    table.add_column("PnL Session ($)", style="bold white", justify="right", no_wrap=True)
-    table.add_column("Ratio WinRate", style="bold yellow", justify="center", no_wrap=True)
+    table.add_column("Part (Plafond)", style="bold yellow", justify="center", no_wrap=True)
+    table.add_column("PnL Session", style="bold white", justify="right", no_wrap=True)
+    table.add_column("WinRate", style="bold yellow", justify="center", no_wrap=True)
     table.add_column("Confiance", style="bold cyan", justify="right", no_wrap=True)
     table.add_column("Signal SOTA", style="bold white", justify="center", no_wrap=True)
-    table.add_column("Kelly ($)", style="bold green", justify="right", no_wrap=True)
     table.add_column("Scan", style="dim", justify="right", no_wrap=True)
 
     with STATE_LOCK:
         for tf, cfg in TIMEFRAME_CONFIGS.items():
             st = LIVE_STATES[tf]
             max_b = cash * cfg["budget_pct"]
-            ckpt_name = os.path.basename(cfg["checkpoint"]).replace("tabfm_residual_BTC_USD", "BTC_USD")
             price_str = f"${st['price']:,.2f}" if st['price'] > 0 else "---"
             var_pct = st["price_change_pct"]
             var_style = "bold green" if var_pct >= 0 else "bold red"
@@ -469,7 +465,6 @@ def render_multi_tf_dashboard():
             spark_str = f"[cyan]{st['sparkline']}[/cyan]"
             conf_str = f"{st['confidence']:.1f}%"
             sig_str = st["signal_text"]
-            notional_str = f"${st['allocated_notional']:,.0f}" if st['allocated_notional'] > 0 else "0$"
             cd_str = f"{st['next_countdown']}s"
             
             st_tf = tf_stats[tf]
@@ -479,20 +474,18 @@ def render_multi_tf_dashboard():
             wr_tf_str = f"{st_tf['winrate']:.0f}% ({st_tf['wins']}/{st_tf['completed']})"
 
             tf_short_name = "1h (Swing)" if tf == "1h" else "5m (Intraday)" if tf == "5m" else "1m (Scalping)"
+            part_str = f"{cfg['budget_pct']*100:.0f}% (${max_b/1000:.1f}k)"
             
             table.add_row(
                 tf_short_name,
-                ckpt_name,
                 price_str,
                 var_str,
                 spark_str,
-                f"{cfg['budget_pct']*100:.0f}%",
-                f"${max_b:,.0f}",
+                part_str,
                 pnl_tf_str,
                 wr_tf_str,
                 conf_str,
                 sig_str,
-                notional_str,
                 cd_str
             )
 
@@ -517,7 +510,7 @@ def render_multi_tf_dashboard():
         wr_title_str = f"{st_tf['winrate']:.0f}% ({st_tf['wins']}/{st_tf['completed']} Gagnés)"
 
         tf_full = "1H (SWING)" if tf_key == "1h" else "5M (INTRADAY)" if tf_key == "5m" else "1M (SCALPING)"
-        title_text = f"📜 JOURNAL {tf_full} | PnL Cumulé: {pnl_title_str} | WinRate: {wr_title_str}"
+        title_text = f"📜 JOURNAL {tf_full} | PnL Session: {pnl_title_str} | WinRate: {wr_title_str}"
 
         j_table = Table(title=title_text, expand=True)
         j_table.add_column("Horodatage", style="dim", justify="left", no_wrap=True)
@@ -529,7 +522,7 @@ def render_multi_tf_dashboard():
         j_table.add_column("Gain/Perte ($)", style="bold white", justify="right", no_wrap=True)
         j_table.add_column("Résultat IA", style="bold yellow", justify="center", no_wrap=True)
 
-        for item in history[:3]:
+        for item in history[:2]:
             t_str = item.get("timestamp", "")
             p_in = item.get("entry_price", 0.0)
             conf = item.get("confidence", 50.0)
