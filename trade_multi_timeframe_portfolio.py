@@ -376,8 +376,8 @@ def render_multi_tf_dashboard():
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=3),
-        Layout(name="main", size=7),
-        Layout(name="journal", size=15),
+        Layout(name="main", size=10),
+        Layout(name="journal", size=14),
         Layout(name="footer", size=2)
     )
 
