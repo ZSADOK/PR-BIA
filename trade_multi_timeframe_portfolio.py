@@ -65,7 +65,7 @@ TIMEFRAME_CONFIGS = {
         "budget_pct": 0.10,
         "checkpoint": "models/tabfm_residual_BTC_USD_1m.pt",
         "interval": "1m",
-        "period": "7d",
+        "period": "2d",
         "interval_sec": 60,
         "min_elapsed_sec": 50,
         "history_file": "data/history_1m.json"
