@@ -389,6 +389,7 @@ def render_multi_tf_dashboard():
     # 2. Table Synthèse des 3 Horizons Temporels
     table = Table(title="📊 PORTFEUILLE ENSEMBLE MULTI-HORIZON (1H: 30% | 5M: 20% | 1M: 10% | CASH SAFETY: 40%)", expand=True)
     table.add_column("Horizon", style="cyan", justify="left")
+    table.add_column("Fichier Poids Modèle", style="dim cyan", justify="left")
     table.add_column("Prix BTC", style="bold white", justify="right")
     table.add_column("Variation", style="bold white", justify="center")
     table.add_column("Tendance Sparkline", style="bold yellow", justify="center")
@@ -403,6 +404,7 @@ def render_multi_tf_dashboard():
         for tf, cfg in TIMEFRAME_CONFIGS.items():
             st = LIVE_STATES[tf]
             max_b = cash * cfg["budget_pct"]
+            ckpt_basename = os.path.basename(cfg["checkpoint"])
             price_str = f"${st['price']:,.2f}" if st['price'] > 0 else "---"
             var_pct = st["price_change_pct"]
             var_style = "bold green" if var_pct >= 0 else "bold red"
@@ -415,6 +417,7 @@ def render_multi_tf_dashboard():
             
             table.add_row(
                 cfg["name"],
+                ckpt_basename,
                 price_str,
                 var_str,
                 spark_str,
