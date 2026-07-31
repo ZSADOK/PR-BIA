@@ -376,8 +376,8 @@ def render_multi_tf_dashboard():
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=3),
-        Layout(name="main", size=6),
-        Layout(name="journal", size=18),
+        Layout(name="main", size=9),
+        Layout(name="journal", size=24),
         Layout(name="footer", size=2)
     )
 
@@ -441,7 +441,7 @@ def render_multi_tf_dashboard():
 
     layout["header"].update(Panel(header_text, style="bold white on blue"))
 
-    # 3. Table Synthèse des 3 Horizons Temporels (Directement dans layout sans Panel lourd)
+    # 3. Table Synthèse Spacieuse des 3 Horizons Temporels
     table = Table(title="📊 PORTFEUILLE ENSEMBLE MULTI-HORIZON (1H: 30% | 5M: 20% | 1M: 10% | CASH SAFETY: 40%)", expand=True)
     table.add_column("Horizon", style="cyan", justify="left", no_wrap=True)
     table.add_column("Prix BTC", style="bold white", justify="right", no_wrap=True)
@@ -486,9 +486,9 @@ def render_multi_tf_dashboard():
                 cd_str
             )
 
-    layout["main"].update(table)
+    layout["main"].update(Panel(table, style="blue"))
 
-    # 4. 3 Tableaux Séparés et Empilés Verticalement pour 1h, 5m, et 1m
+    # 4. 3 Tableaux Séparés et Agrandis Empilés Verticalement pour 1h, 5m, et 1m
     journal_layout = Layout()
     journal_layout.split_column(
         Layout(name="j_1h", ratio=1),
@@ -519,7 +519,7 @@ def render_multi_tf_dashboard():
         j_table.add_column("Gain/Perte ($)", style="bold white", justify="right", no_wrap=True)
         j_table.add_column("Résultat IA", style="bold yellow", justify="center", no_wrap=True)
 
-        for item in history[:3]:
+        for item in history[:4]:
             t_str = item.get("timestamp", "")
             p_in = item.get("entry_price", 0.0)
             conf = item.get("confidence", 50.0)
