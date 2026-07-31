@@ -1,9 +1,12 @@
 """
-Point d'Entrée Principal du Bot de Trading Algorithmique TimesFM (ETH 1h).
+Point d'Entrée Principal du Bot de Trading Algorithmique TimesFM + Meta-Labeler (ETH 5m).
 Unifie :
-- Étape 2 : Ingestion de données massives (CCXT), Pré-screening Volume/Momentum & Prédiction TimesFM H+1
-- Étape 3 : Gestion du Risque, Dynamic Kelly Allocation & Envelope Safety
-- Étape 4 : Exécution automatique des ordres via CCXT (Sandbox / Live)
+- Ingestion de données 5m massives (CCXT Binance)
+- Pré-Screening Volume Relatif (RVOL > 1.2x) & Momentum 5m
+- Inférence IA TimesFM (H+1 5m forecast)
+- Méta-Filtre XGBoost Triple Barrière (Win Rate > 75%)
+- Dynamic Kelly Allocation & Envelope Safety (Risk Manager)
+- Exécution automatique CCXT (Market/Limit, Sandbox/Live)
 """
 import os
 import sys
@@ -14,42 +17,58 @@ from config.settings import config
 from src.data_loader import get_large_eth_data
 from src.screening.momentum_screener import MomentumScreener
 from src.models.timesfm_engine import TimesFMEngine
+from src.models.meta_labeler import MetaLabeler
 from src.risk.risk_manager import RiskManager
 from src.execution.ccxt_executor import CCXTExecutor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("TimesFMBot")
+logger = logging.getLogger("TimesFMBot5m")
 
 def run_trading_cycle(capital: float = 10000.0) -> dict:
-    logger.info("=== NOUVEAU CYCLE DU BOT DE TRADING ETH (TIMESFM) ===")
+    logger.info("=== NOUVEAU CYCLE DU BOT DE TRADING ETH 5M (TIMESFM + META-LABELER) ===")
     
-    # 1. Ingestion des Données Historiques CCXT Binance (ETH/USDT 1h)
-    logger.info(f"1. Ingestion des données historiques 1h pour {config.symbol}...")
-    df = get_large_eth_data(symbol=config.symbol, timeframe=config.timeframe, days_back=90, force_refresh=False)
+    # 1. Ingestion des Données 5m (CCXT Binance)
+    logger.info(f"1. Ingestion des données historiques {config.timeframe} pour {config.symbol}...")
+    df = get_large_eth_data(symbol=config.symbol, timeframe=config.timeframe, days_back=30, force_refresh=False)
     
     if len(df) < 50:
         logger.error("Données insuffisantes.")
         return {"status": "error", "message": "Données insuffisantes"}
 
     current_price = float(df['Close'].iloc[-1])
-    logger.info(f"Dernier prix ETH (1h) : {current_price:.2f} $ ({len(df)} bougies 1h en mémoire)")
+    logger.info(f"Dernier prix ETH (5m) : {current_price:.2f} $ ({len(df)} bougies 5m en mémoire)")
     
     # 2. Pré-Screening (RVOL > 1.2, SMA 50/200, RSI 50-72)
-    logger.info("2. Calcul du Pré-Screening Volume & Momentum...")
+    logger.info("2. Calcul du Pré-Screening Volume & Momentum 5m...")
     screener = MomentumScreener(rvol_threshold=config.rvol_threshold)
     df_screened = screener.compute_indicators(df)
     latest_screen = screener.evaluate_latest(df_screened)
     logger.info(f"Résultat Screener : RVOL={latest_screen['rvol']:.2f}, Trend_OK={latest_screen['trend_ok']}, Passed={latest_screen['passed']}")
     
-    # 3. Prédiction Zero-Shot TimesFM & Signal Binaire
-    logger.info("3. Inférence du modèle Zero-Shot TimesFM (H+1)...")
+    # 3. Prédiction Zero-Shot TimesFM (5m H+1)
+    logger.info("3. Inférence du modèle TimesFM (5m H+1)...")
     engine = TimesFMEngine(context_len=config.context_len, horizon_len=config.horizon_len, backend=config.backend)
     signal = engine.generate_signal(df_screened, screener_passed=latest_screen['passed'])
-    logger.info(f"Prédiction TimesFM Prix H+1 : {signal['predicted_price']:.2f} $ (Variation: {signal['predicted_return_pct']:+.4f}%)")
-    logger.info(f"Signal Binaire Généré : {signal['signal_binary']} -> {signal['signal_label']}")
+    logger.info(f"Prédiction TimesFM Prix H+1 (5m) : {signal['predicted_price']:.2f} $ (Variation: {signal['predicted_return_pct']:+.4f}%)")
+    
+    # 3.5 ÉVALUATION DU MÉTA-LABELER XGBOOST (Élimination des faux signaux)
+    logger.info("3.5 Évaluation par le Méta-Filtre XGBoost (Triple Barrière)...")
+    meta_labeler = MetaLabeler()
+    meta_confidence = meta_labeler.predict_meta_confidence(df_screened, timesfm_pred_return=signal['predicted_return_pct']/100.0)
+    
+    meta_passed = meta_confidence >= config.min_meta_confidence
+    logger.info(f"Score de Confiance Méta-Model : {meta_confidence*100:.2f}% (Seuil requis >= {config.min_meta_confidence*100:.0f}%) -> Passed: {meta_passed}")
+    
+    # Validation finale du Signal Binaire
+    final_signal_binary = 1 if (signal['signal_binary'] == 1 and meta_passed) else 0
+    signal['signal_binary'] = final_signal_binary
+    signal['signal_label'] = "BUY (LONG - META CONFIRMED)" if final_signal_binary == 1 else "SELL / NEUTRAL"
+    signal['meta_confidence'] = meta_confidence
+    
+    logger.info(f"Signal Binaire Final après Méta-Filtre : {final_signal_binary} -> {signal['signal_label']}")
     
     # 4. Gestion du Risque & Position Sizing (Dynamic Kelly Allocation)
-    logger.info("4. Calcul du Position Sizing & Protection du Capital...")
+    logger.info("4. Calcul du Position Sizing & Dynamic Kelly Allocation...")
     risk_mgr = RiskManager(
         default_risk_pct=config.risk_per_trade,
         max_kelly_fraction=config.max_kelly_fraction,
@@ -59,12 +78,13 @@ def run_trading_cycle(capital: float = 10000.0) -> dict:
         total_capital=capital,
         entry_price=current_price,
         df_ohlcv=df_screened,
-        signal_dict=signal
+        signal_dict=signal,
+        historical_win_rate=max(0.60, meta_confidence)
     )
     
     logger.info(f"Position Sizing : Capital Alloué = {position_info['capital_allocated']:.2f} € | Units = {position_info['quantity_units']:.4f} ETH")
     if position_info['capital_allocated'] > 0:
-        logger.info(f"Stop-Loss = {position_info['stop_loss_price']:.2f} $ | Take-Profit = {position_info['take_profit_price']:.2f} $")
+        logger.info(f"Stop-Loss (5m) = {position_info['stop_loss_price']:.2f} $ | Take-Profit (5m) = {position_info['take_profit_price']:.2f} $")
     
     # 5. Exécution Automatisée CCXT
     logger.info("5. Exécution automatique via CCXT Executor...")
@@ -86,5 +106,5 @@ def run_trading_cycle(capital: float = 10000.0) -> dict:
 
 if __name__ == "__main__":
     res = run_trading_cycle()
-    print("\n=== FIN DU CYCLE ===")
+    print("\n=== FIN DU CYCLE ETH 5M ===")
     print(res)
