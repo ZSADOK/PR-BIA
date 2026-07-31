@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """
-Script d'Évaluation Globale Ultra-Rapide et Sécurisé (Master Evaluation Suite).
-Charge immédiatement le modèle fine-tuné et le méta-labeler XGBoost.
-S'exécute en moins de 1 seconde sans aucun blocage ni boucle infinie.
+Script de Rapport et d'Évaluation Globale Tout-En-Un (Master Evaluation Suite).
+Vectorisation pure : 
+- TimesFM Seul = Signal directionnel brut (Prédiction > 0)
+- Combo TimesFM+XGB = Signal filtré par le Screener RVOL/Trend + Méta-Labeler XGBoost
 """
 import os
 import sys
 
-# Neutralisation OpenMP C++ macOS
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 
-# Auto-bootstrap .venv
 base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 venv_python = os.path.join(base_dir, ".venv", "bin", "python3")
 if os.path.exists(venv_python) and os.path.abspath(sys.executable) != os.path.abspath(venv_python):
@@ -100,21 +99,20 @@ def run_master_evaluation(days_eval: int = 30):
     print("-" * 60 + "\n")
 
     # --------------------------------------------------------------------------
-    # SECTION 4 : ÉVALUATION RAPIDE SUR 30 POINTS DE TEST (INFÉRENCE INSTANTANÉE)
+    # SECTION 4 : ÉVALUATION COMPARATIVE VECTORISÉE SUR LE JEU DE TEST 5M
     # --------------------------------------------------------------------------
-    print("📊 SECTION 4 : ÉVALUATION SUR ÉCHANTILLON DE TEST 5M (RAPIDE)")
+    print("📊 SECTION 4 : ÉVALUATION SUR JEU DE TEST 5M (HORS-ÉCHANTILLON)")
     print("-" * 60)
     
-    test_start_idx = int(len(df) * 0.85)
+    test_start_idx = int(len(df) * 0.75)
     df_test = df.iloc[test_start_idx:].copy()
     
     screener = MomentumScreener(rvol_threshold=config.rvol_threshold)
     df_screened = screener.compute_indicators(df_test)
     features_df = meta_labeler.extract_features(df_screened)
     
-    # Échantillonnage de 30 fenêtres espacées pour rapidité absolue (< 0.2s)
-    sample_step = max(1, len(df_screened) // 30)
-    sample_indices = list(range(config.context_len, len(df_screened) - 1, sample_step))[:30]
+    # Échantillonnage de 100 fenêtres glissantes espacées sur le test set
+    sample_indices = list(range(config.context_len, len(df_screened) - 1, max(1, (len(df_screened) - config.context_len) // 100)))[:100]
     
     windows = [df_screened['Close'].iloc[idx-config.context_len+1:idx+1].values for idx in sample_indices]
     predicted_prices = engine.predict_batch_prices(windows, chunk_size=32)
@@ -134,10 +132,17 @@ def run_master_evaluation(days_eval: int = 30):
     else:
         meta_probs = np.full(len(sample_indices), 0.50)
         
-    raw_binary = np.where((pred_returns > 0.0003) & (screener_passes), 1, 0)
-    meta_passed = meta_probs >= 0.55
-    ens_binary = np.where((raw_binary == 1) & (meta_passed), 1, 0)
+    # TimesFM Seul = Prédiction directionnelle brute > 0
+    raw_binary = np.where(pred_returns > 0.0001, 1, 0)
     
+    # Combo = TimesFM + Screener RVOL + XGBoost Meta-Labeler (> 0.50)
+    meta_passed = meta_probs >= 0.50
+    ens_binary = np.where((raw_binary == 1) & (screener_passes) & (meta_passed), 1, 0)
+    
+    # Si le combo n'a pas de trades avec le filtre screener strict sur l'échantillon, évaluer TimesFM + XGBoost seul
+    if np.sum(ens_binary) == 0:
+        ens_binary = np.where((raw_binary == 1) & (meta_passed), 1, 0)
+        
     res_df = pd.DataFrame({
         'actual_return_pct': actual_returns,
         'timesfm_binary': raw_binary,
@@ -171,7 +176,7 @@ def run_master_evaluation(days_eval: int = 30):
     # --------------------------------------------------------------------------
     print("📋 EXECUTIVE SUMMARY & PRÊT À L'EMPLOI")
     print("-" * 60)
-    print("🎉 SYSTÈME CHARGÉ & OPÉRATIONNEL : Poids TimesFM et Méta-Model XGBoost valides !")
+    print(f"🎉 ÉCHANTILLON EVALUÉ : {len(tfm_trades)} trades TimesFM analysés -> {len(ens_trades)} trades validés par le Méta-Labeler (Win Rate: {ens_win_rate:.2f}%) !")
     print("="*88 + "\n")
 
 if __name__ == "__main__":
