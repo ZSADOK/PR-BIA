@@ -1,9 +1,9 @@
 """
 Script d'Entraînement & Fine-Tuning Ultra-Optimisé pour Google TimesFM 1.0 (ETH 1h).
-Affiche la Loss (MSE), la Loss de Validation et la Précision Directionnelle (Win Rate %) à chaque époque.
+Intègre l'Early Stopping dynamique avec patience et la sauvegarde du meilleur modèle.
 
 Usage Colab :
-!python scripts/train_timesfm.py --epochs 10 --days 730 --lr 5e-5
+!python scripts/train_timesfm.py --epochs 30 --patience 5 --days 730 --lr 5e-5
 """
 import os
 import sys
@@ -33,7 +33,6 @@ try:
 except ImportError:
     logger.error("CCXT est requis. Lancez: pip install ccxt")
 
-# Tentative d'importation de la librairie TimesFM de Google
 HAS_TIMESFM = False
 TimesFmClass = None
 try:
@@ -60,12 +59,11 @@ if HAS_TORCH:
             self.head = nn.Linear(d_model, 1)
 
         def forward(self, x):
-            # x shape: [batch, context_len] -> [batch, context_len, 1]
             if x.dim() == 2:
                 x = x.unsqueeze(-1)
             h = self.input_proj(x) + self.pos_encoder[:, :x.size(1), :]
             out = self.transformer(h)
-            pred = self.head(out[:, -1, :]) # Prédiction H+1
+            pred = self.head(out[:, -1, :])
             return pred
 
 # ==============================================================================
@@ -135,12 +133,13 @@ def download_historical_data(symbol: str = "ETH/USDT", timeframe: str = "1h", da
     return df
 
 # ==============================================================================
-# PIPELINE DE FINE-TUNING & AFFICHAGE DES MÉTRIQUES (LOSS / ACCURACY)
+# PIPELINE DE FINE-TUNING AVEC EARLY STOPPING
 # ==============================================================================
 def train(
     symbol: str = "ETH/USDT",
     days_back: int = 730,
-    epochs: int = 10,
+    epochs: int = 30,
+    patience: int = 5,
     batch_size: int = 32,
     lr: float = 5e-5,
     context_len: int = 512,
@@ -154,11 +153,9 @@ def train(
     if device.type == "cuda":
         logger.info(f"🔥 GPU Détecté : {torch.cuda.get_device_name(0)}")
 
-    # 1. Téléchargement des Données
     df = download_historical_data(symbol=symbol, timeframe="1h", days_back=days_back)
     close_prices = df['Close'].values
 
-    # 2. Split Temporel (85% Train, 15% Validation)
     split_idx = int(len(close_prices) * 0.85)
     train_dataset = TimesFMTimeSeriesDataset(close_prices[:split_idx], context_len=context_len, horizon_len=1)
     val_dataset = TimesFMTimeSeriesDataset(close_prices[split_idx:], context_len=context_len, horizon_len=1)
@@ -168,7 +165,6 @@ def train(
 
     logger.info(f"📊 Dataset configuré : {len(train_dataset)} échantillons Train | {len(val_dataset)} échantillons Validation.")
 
-    # 3. Initialisation de l'architecture modèle
     model = None
     if HAS_TIMESFM and TimesFmClass is not None:
         try:
@@ -194,10 +190,12 @@ def train(
     model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-    criterion = nn.SmoothL1Loss() # Huber Loss
+    criterion = nn.SmoothL1Loss()
 
     best_val_loss = float('inf')
-    logger.info(f"\n=================== DÉBUT DU FINE-TUNING ({epochs} ÉPOQUES) ===================")
+    patience_counter = 0
+
+    logger.info(f"\n=================== DÉBUT DU FINE-TUNING (MAX {epochs} ÉPOQUES - PATIENCE {patience}) ===================")
 
     for epoch in range(1, epochs + 1):
         model.train()
@@ -221,7 +219,7 @@ def train(
         scheduler.step()
         train_loss /= len(train_loader)
 
-        # 4. Évaluation sur la Validation (Calcul Loss & Accuracy Directionnelle)
+        # Évaluation Validation
         model.eval()
         val_loss = 0.0
         correct_direction = 0
@@ -237,7 +235,6 @@ def train(
                 v_loss = criterion(preds[:, -1:], batch_tgt)
                 val_loss += v_loss.item()
                 
-                # Précision Directionnelle (Win Rate %)
                 pred_delta = preds[:, -1].cpu().numpy()
                 actual_delta = target_p.numpy() - last_p.numpy()
                 
@@ -248,26 +245,33 @@ def train(
         val_loss /= len(val_loader)
         accuracy_pct = (correct_direction / total_eval) * 100.0 if total_eval > 0 else 0.0
 
-        is_best = val_loss < best_val_loss
-        if is_best:
+        # Logique d'Early Stopping
+        if val_loss < best_val_loss:
             best_val_loss = val_loss
+            patience_counter = 0
             torch.save(model.state_dict(), save_path)
-            best_tag = "🔥 [NOUVEAU MEILLEUR MODÈLE SAUVEGARDÉ]"
+            best_tag = "🔥 [MEILLEUR MODÈLE SAUVEGARDÉ]"
         else:
-            best_tag = ""
+            patience_counter += 1
+            best_tag = f"⏳ (Patience: {patience_counter}/{patience})"
 
-        logger.info(f"Époque [{epoch:02d}/{epochs:02d}] | Train Loss (MSE): {train_loss:.6f} | Val Loss: {val_loss:.6f} | Win Rate Directionnel: {accuracy_pct:.2f}% {best_tag}")
+        logger.info(f"Époque [{epoch:02d}/{epochs:02d}] | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f} | Win Rate: {accuracy_pct:.2f}% {best_tag}")
+
+        if patience_counter >= patience:
+            logger.info(f"\n🛑 EARLY STOPPING DÉCLENCHÉ ! Aucune amélioration de la Val Loss depuis {patience} époques consécutives.")
+            logger.info(f"Arrêt préventif à l'époque {epoch} pour éviter le sur-apprentissage.")
+            break
 
     logger.info(f"===========================================================================")
-    logger.info(f"🎉 FINE-TUNING TERMINÉ avec succès !")
-    logger.info(f"📌 Meilleure Loss de Validation : {best_val_loss:.6f}")
-    logger.info(f"💾 Poids sauvegardés dans : {save_path}\n")
+    logger.info(f"🎉 FINE-TUNING TERMINÉ ! Meilleure Loss de Validation : {best_val_loss:.6f}")
+    logger.info(f"💾 Poids optimaux conservés dans : {save_path}\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine-Tuning TimesFM ETH 1h")
     parser.add_argument("--symbol", type=str, default="ETH/USDT")
     parser.add_argument("--days", type=int, default=730, help="Jours d'historique (730d = 2 ans)")
-    parser.add_argument("--epochs", type=int, default=10, help="Nombre d'époques")
+    parser.add_argument("--epochs", type=int, default=30, help="Nombre d'époques max")
+    parser.add_argument("--patience", type=int, default=5, help="Patience d'Early Stopping")
     parser.add_argument("--batch_size", type=int, default=32, help="Taille de batch")
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning Rate")
     parser.add_argument("--output_dir", type=str, default="models")
@@ -277,6 +281,7 @@ if __name__ == "__main__":
         symbol=args.symbol,
         days_back=args.days,
         epochs=args.epochs,
+        patience=args.patience,
         batch_size=args.batch_size,
         lr=args.lr,
         output_dir=args.output_dir
