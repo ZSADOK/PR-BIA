@@ -217,6 +217,16 @@ def timeframe_worker(tf: str):
             allocated_notional = 0.0
             signal_text = "[yellow]NEUTRE / CASH[/yellow]"
 
+            # Position Alpaca
+            has_open_pos = False
+            try:
+                positions = trading_client.get_all_positions()
+                btc_pos = [p for p in positions if p.symbol in ["BTCUSD", "BTC/USD"]]
+                if btc_pos:
+                    has_open_pos = True
+            except Exception:
+                has_open_pos = False
+
             # 3. Inférence PyTorch
             if is_trained and model is not None:
                 feat_df = apply_triple_barrier_and_features(raw_data, apply_prescreen=False, interval=cfg["interval"])
@@ -250,10 +260,13 @@ def timeframe_worker(tf: str):
                         execute_trade_signals(signal_data, threshold=0.58, notional=allocated_notional, max_budget=max_tf_budget, max_trade_cap=max_tf_budget)
                     elif prob_val <= 0.42:
                         action = "SELL"
-                        signal_text = "[bold red]VENTE / CASH[/bold red]"
+                        if has_open_pos:
+                            signal_text = "[bold red]ORDER SELL (LIQUIDATION POSITION)[/bold red]"
+                        else:
+                            signal_text = "[bold yellow]HOLD (100% CASH - IA BAISSIÈRE)[/bold yellow]"
                     else:
                         action = "HOLD"
-                        signal_text = "[bold yellow]NEUTRE / CASH[/bold yellow]"
+                        signal_text = "[bold yellow]HOLD (100% CASH - IA NEUTRE)[/bold yellow]"
 
             # 4. Mise à jour de l'historique
             update_tf_history(tf, current_price, confidence, action)
@@ -283,13 +296,13 @@ def timeframe_worker(tf: str):
 def render_multi_tf_dashboard():
     layout = Layout()
     layout.split_column(
-        Layout(name="header", size=3),
+        Layout(name="header", size=4),
         Layout(name="main", size=14),
         Layout(name="journal", size=12),
         Layout(name="footer", size=3)
     )
 
-    # 1. Compte Alpaca
+    # 1. Compte Alpaca & Prix Temps Réel BTC
     try:
         account = trading_client.get_account()
         total_equity = float(account.equity)
@@ -299,11 +312,43 @@ def render_multi_tf_dashboard():
     except Exception:
         total_equity, cash, pnl, pnl_pct = 100000.0, 100000.0, 0.0, 0.0
 
-    layout["header"].update(Panel(
+    # Récupérer les données de prix récentes pour les variations 5m et 1h
+    latest_price = 0.0
+    var_5m_pct = 0.0
+    var_1h_pct = 0.0
+    with STATE_LOCK:
+        if LIVE_STATES["5m"]["price"] > 0:
+            latest_price = LIVE_STATES["5m"]["price"]
+        elif LIVE_STATES["1m"]["price"] > 0:
+            latest_price = LIVE_STATES["1m"]["price"]
+        elif LIVE_STATES["1h"]["price"] > 0:
+            latest_price = LIVE_STATES["1h"]["price"]
+
+    if latest_price == 0.0:
+        try:
+            raw_sample = yf.download(SINGLE_TICKER, period="5d", interval="5m", progress=False)
+            c_series = raw_sample["Close"].iloc[:, 0] if isinstance(raw_sample["Close"], pd.DataFrame) else raw_sample["Close"]
+            c_vals = c_series.dropna().values.flatten()
+            latest_price = c_vals[-1]
+            p5m = c_vals[-2] if len(c_vals) >= 2 else latest_price
+            p1h = c_vals[-13] if len(c_vals) >= 13 else c_vals[0]
+            var_5m_pct = ((latest_price - p5m) / p5m) * 100.0
+            var_1h_pct = ((latest_price - p1h) / p1h) * 100.0
+        except Exception:
+            latest_price = 0.0
+
+    style_5m = "green" if var_5m_pct >= 0 else "red"
+    style_1h = "green" if var_1h_pct >= 0 else "red"
+
+    header_text = (
         f"[bold white]🏛️ PR-BIA MULTI-TIMEFRAME ENSEMBLE SYSTEM | ALLOCATION STRICTE DE CASH PORTFOLIO[/bold white]\n"
-        f"Capital: [cyan]${total_equity:,.2f}[/cyan] | Cash Disponible: [green]${cash:,.2f}[/green] | PnL Global: [{'green' if pnl>=0 else 'red'}]${pnl:+,.2f} ({pnl_pct:+.2f}%)[/{'green' if pnl>=0 else 'red'}]",
-        style="bold white on blue"
-    ))
+        f"Prix BTC-USD: [bold yellow]${latest_price:,.2f}[/bold yellow] | "
+        f"Var 5m: [{style_5m}]{var_5m_pct:+.2f}%[/{style_5m}] | "
+        f"Var 1h: [{style_1h}]{var_1h_pct:+.2f}%[/{style_1h}] | "
+        f"Capital: [cyan]${total_equity:,.2f}[/cyan] | Cash: [green]${cash:,.2f}[/green] | PnL: [{'green' if pnl>=0 else 'red'}]${pnl:+,.2f} ({pnl_pct:+.2f}%)[/{'green' if pnl>=0 else 'red'}]"
+    )
+
+    layout["header"].update(Panel(header_text, style="bold white on blue"))
 
     # 2. Table Synthèse des 3 Horizons Temporels
     table = Table(title="📊 PORTFEUILLE ENSEMBLE MULTI-HORIZON (1H: 30% | 5M: 20% | 1M: 10% | CASH SAFETY: 40%)", expand=True)
