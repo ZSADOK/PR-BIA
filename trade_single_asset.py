@@ -173,17 +173,21 @@ def get_single_asset_live_panel(remaining_sec: int = 0) -> Layout:
     current_interval = "5m" if "5m" in CHECKPOINT_PATH else "1h"
     raw_data = yf.download(SINGLE_TICKER, period="30d", interval=current_interval, progress=False)
     close_series = raw_data["Close"].iloc[:, 0] if isinstance(raw_data["Close"], pd.DataFrame) else raw_data["Close"]
-    close_vals = close_series.dropna().values.flatten()
-    current_price = close_vals[-1]
-    
-    # Calcul des variations 5 min et 1h séparément
-    price_5m_ago = close_vals[-2] if len(close_vals) >= 2 else current_price
-    var_5m_pct = ((current_price - price_5m_ago) / price_5m_ago) * 100.0
+    if len(close_vals) == 0:
+        current_price = 0.0
+        var_5m_pct = 0.0
+        var_1h_pct = 0.0
+    else:
+        current_price = close_vals[-1]
+        
+        # Calcul des variations 5 min et 1h séparément
+        price_5m_ago = close_vals[-2] if len(close_vals) >= 2 else current_price
+        var_5m_pct = ((current_price - price_5m_ago) / price_5m_ago) * 100.0 if price_5m_ago > 0 else 0.0
 
-    # 12 bougies 5m = 1h (ou 1 bougie si interval == "1h")
-    h_lookback = 13 if current_interval == "5m" else 2
-    price_1h_ago = close_vals[-h_lookback] if len(close_vals) >= h_lookback else close_vals[0]
-    var_1h_pct = ((current_price - price_1h_ago) / price_1h_ago) * 100.0
+        # 12 bougies 5m = 1h (ou 1 bougie si interval == "1h")
+        h_lookback = 13 if current_interval == "5m" else 2
+        price_1h_ago = close_vals[-h_lookback] if len(close_vals) >= h_lookback else close_vals[0]
+        var_1h_pct = ((current_price - price_1h_ago) / price_1h_ago) * 100.0 if price_1h_ago > 0 else 0.0
 
     confidence = 50.0
     signal_text = "[bold yellow]HOLD (NEUTRE / CASH)[/bold yellow]"
