@@ -381,12 +381,39 @@ def render_multi_tf_dashboard():
         Layout(name="footer", size=3)
     )
 
-    # 1. État du compte en mémoire (0ms, aucun appel réseau dans le rendu UI)
+    # 1. Calcul des statistiques cumulées de session (1h, 5m, 1m & Global)
+    global_pnl = 0.0
+    global_wins = 0
+    global_completed = 0
+    tf_stats = {}
+
+    for tf_key in ["1h", "5m", "1m"]:
+        cfg = TIMEFRAME_CONFIGS[tf_key]
+        history = load_tf_history(cfg["history_file"])
+        
+        completed_items = [x for x in history if x.get("status") == "COMPLETED"]
+        tf_pnl = sum(x.get("pnl_dollar", 0.0) for x in completed_items)
+        tf_wins = sum(1 for x in completed_items if "RAISON" in x.get("outcome", ""))
+        tf_comp = len(completed_items)
+        tf_winrate = (tf_wins / tf_comp * 100.0) if tf_comp > 0 else 0.0
+
+        tf_stats[tf_key] = {
+            "pnl": tf_pnl,
+            "wins": tf_wins,
+            "completed": tf_comp,
+            "winrate": tf_winrate
+        }
+
+        global_pnl += tf_pnl
+        global_wins += tf_wins
+        global_completed += tf_comp
+
+    global_winrate = (global_wins / global_completed * 100.0) if global_completed > 0 else 0.0
+
+    # 2. État du compte en mémoire (0ms, aucun appel réseau dans le rendu UI)
     with STATE_LOCK:
         total_equity = ACCOUNT_STATE["equity"]
         cash = ACCOUNT_STATE["cash"]
-        pnl = ACCOUNT_STATE["pnl"]
-        pnl_pct = ACCOUNT_STATE["pnl_pct"]
 
         latest_price = 0.0
         if LIVE_STATES["1m"]["price"] > 0:
@@ -401,18 +428,20 @@ def render_multi_tf_dashboard():
 
     style_5m = "green" if var_5m_pct >= 0 else "red"
     style_1h = "green" if var_1h_pct >= 0 else "red"
+    g_pnl_style = "bold green" if global_pnl >= 0 else "bold red"
 
     header_text = (
-        f"[bold white]🏛️ PR-BIA MULTI-TIMEFRAME ENSEMBLE SYSTEM | ALLOCATION STRICTE DE CASH PORTFOLIO[/bold white]\n"
+        f"[bold white]🏛️ PR-BIA MULTI-TIMEFRAME ENSEMBLE SYSTEM | BILAN DE SESSION D'EXÉCUTION CONTINU[/bold white]\n"
         f"Prix BTC-USD: [bold yellow]${latest_price:,.2f}[/bold yellow] | "
-        f"Var 5m: [{style_5m}]{var_5m_pct:+.2f}%[/{style_5m}] | "
-        f"Var 1h: [{style_1h}]{var_1h_pct:+.2f}%[/{style_1h}] | "
-        f"Capital: [cyan]${total_equity:,.2f}[/cyan] | Cash: [green]${cash:,.2f}[/green] | PnL: [{'green' if pnl>=0 else 'red'}]${pnl:+,.2f} ({pnl_pct:+.2f}%)[/{'green' if pnl>=0 else 'red'}]"
+        f"Var 5m: [{style_5m}]{var_5m_pct:+.2f}%[/{style_5m}] | Var 1h: [{style_1h}]{var_1h_pct:+.2f}%[/{style_1h}] | "
+        f"Capital: [cyan]${total_equity:,.2f}[/cyan] | Cash: [green]${cash:,.2f}[/green] | "
+        f"PnL Cumulé: [{g_pnl_style}]${global_pnl:+,.2f}[/{g_pnl_style}] | "
+        f"Ratio Global: [bold yellow]{global_winrate:.1f}% ({global_wins}/{global_completed} Gagnés)[/bold yellow]"
     )
 
     layout["header"].update(Panel(header_text, style="bold white on blue"))
 
-    # 2. Table Synthèse des 3 Horizons Temporels (no_wrap=True pour empêcher tout retour à la ligne)
+    # 3. Table Synthèse des 3 Horizons Temporels (no_wrap=True pour empêcher tout retour à la ligne)
     table = Table(title="📊 PORTFEUILLE ENSEMBLE MULTI-HORIZON (1H: 30% | 5M: 20% | 1M: 10% | CASH SAFETY: 40%)", expand=True)
     table.add_column("Horizon", style="cyan", justify="left", no_wrap=True)
     table.add_column("Fichier Modèle", style="dim cyan", justify="left", no_wrap=True)
@@ -459,7 +488,7 @@ def render_multi_tf_dashboard():
 
     layout["main"].update(Panel(table, style="blue"))
 
-    # 3. 3 Tableaux Dédiés par Horizon Temporel (1h, 5m, 1m)
+    # 4. 3 Tableaux Dédiés par Horizon avec PnL Cumulé ($) & WinRate Ratio
     journal_layout = Layout()
     journal_layout.split_row(
         Layout(name="j_1h", ratio=1),
@@ -467,18 +496,20 @@ def render_multi_tf_dashboard():
         Layout(name="j_1m", ratio=1)
     )
 
-    tf_labels = {
-        "1h": "📜 JOURNAL 1H (SWING)",
-        "5m": "📜 JOURNAL 5M (INTRADAY)",
-        "1m": "📜 JOURNAL 1M (SCALPING)"
-    }
-
     for tf_key, tf_name in [("1h", "j_1h"), ("5m", "j_5m"), ("1m", "j_1m")]:
         cfg = TIMEFRAME_CONFIGS[tf_key]
         history = load_tf_history(cfg["history_file"])
         history.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
 
-        j_table = Table(title=tf_labels[tf_key], expand=True)
+        st_tf = tf_stats[tf_key]
+        p_style = "bold green" if st_tf["pnl"] >= 0 else "bold red"
+        pnl_title_str = f"[{p_style}]${st_tf['pnl']:+,.2f}[/{p_style}]"
+        wr_title_str = f"{st_tf['winrate']:.0f}% ({st_tf['wins']}/{st_tf['completed']})"
+
+        tf_label = "1H" if tf_key == "1h" else "5M" if tf_key == "5m" else "1M"
+        title_text = f"📜 {tf_label}: {pnl_title_str} | Ratio: {wr_title_str}"
+
+        j_table = Table(title=title_text, expand=True)
         j_table.add_column("Heure", style="dim", justify="left", no_wrap=True)
         j_table.add_column("Entrée", style="white", justify="right", no_wrap=True)
         j_table.add_column("Signal", style="bold white", justify="center", no_wrap=True)
