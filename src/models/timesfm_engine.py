@@ -2,7 +2,7 @@
 Module de Modélisation et Prédiction avec Google TimesFM (Zero-Shot & Fine-Tuned).
 Convertit les séries temporelles brutes OHLCV de 5m en prédiction de prix continue
 et génère un signal binaire de trading (1 = Achat/Long, 0 = Neutre/Vente/Short).
-Charge automatiquement les poids fine-tunés depuis models/timesfm_eth_finetuned.pt s'ils existent.
+Charge obligatoirement les poids fine-tunés depuis models/timesfm_eth_finetuned.pt dès qu'ils existent.
 """
 import os
 import numpy as np
@@ -49,51 +49,51 @@ class TimesFMEngine:
         self._init_model()
 
     def _init_model(self):
-        """Initialise le modèle TimesFM et charge les poids fine-tunés Colab s'ils existent."""
-        # 1. Tentative d'importation dynamique native TimesFM
-        try:
-            import timesfm
-            if hasattr(timesfm, 'TimesFm'):
-                TimesFmClass = timesfm.TimesFm
-            elif hasattr(timesfm, 'TimesFM'):
-                TimesFmClass = timesfm.TimesFM
-            else:
-                from timesfm import TimesFm as TimesFmClass
-                
-            logger.info("Chargement du modèle de fondation Google TimesFM...")
-            self.model = TimesFmClass(
-                context_len=self.context_len,
-                horizon_len=self.horizon_len,
-                input_patch_len=32,
-                output_patch_len=128,
-                num_layers=20,
-                model_dims=1280,
-                backend=self.backend
-            )
-            self.model.load_from_checkpoint(repo_id="google/timesfm-1.0-200m")
-        except Exception as e:
-            logger.warning(f"Note : Inférence native TimesFM ({e}). Utilisation du PyTorch Transformer Engine.")
-            if HAS_TORCH:
+        """Initialise le modèle et charge prioritairement les poids Fine-Tuned Colab s'ils existent."""
+        # 1. SI UN FICHIER DE POIDS FINE-TUNED EXISTE, LE CHARGER DIRECTEMENT
+        if HAS_TORCH and os.path.exists(FINETUNED_PATH):
+            try:
+                logger.info(f"🔥 CHARGEMENT DU MODÈLE FINE-TUNÉ : {FINETUNED_PATH}")
                 self.model = PyTorchTimesFMModel(context_len=self.context_len)
+                state_dict = torch.load(FINETUNED_PATH, map_location=self.backend)
+                self.model.load_state_dict(state_dict, strict=False)
+                
                 if self.backend == "cuda" and torch.cuda.is_available():
                     self.model.to("cuda")
                 self.model.eval()
-
-        # 2. Chargement des Poids Fine-Tuned (.pt) s'ils existent
-        if HAS_TORCH and os.path.exists(FINETUNED_PATH):
-            try:
-                logger.info(f"Détection et chargement des poids Fine-Tuned : {FINETUNED_PATH}")
-                state_dict = torch.load(FINETUNED_PATH, map_location=self.backend)
-                
-                if hasattr(self, 'model') and self.model is not None:
-                    if hasattr(self.model, '_model'):
-                        self.model._model.load_state_dict(state_dict, strict=False)
-                    elif isinstance(self.model, PyTorchTimesFMModel):
-                        self.model.load_state_dict(state_dict, strict=False)
-                    self.is_finetuned = True
-                    logger.info("Poids Fine-Tuned chargés avec succès !")
+                self.is_finetuned = True
+                logger.info("✅ Poids du modèle TimesFM Fine-Tuné chargés avec succès !")
+                return
             except Exception as e_ft:
-                logger.warning(f"Impossible d'injecter les poids fine-tunés ({e_ft}).")
+                logger.error(f"Erreur chargement poids fine-tunés: {e_ft}")
+
+        # 2. Sinon, tentative d'importation native TimesFM
+        try:
+            import timesfm
+            TimesFmClass = getattr(timesfm, 'TimesFm', getattr(timesfm, 'TimesFM', None))
+            if TimesFmClass is not None:
+                logger.info("Chargement du modèle de fondation Google TimesFM (Zero-Shot)...")
+                self.model = TimesFmClass(
+                    context_len=self.context_len,
+                    horizon_len=self.horizon_len,
+                    input_patch_len=32,
+                    output_patch_len=128,
+                    num_layers=20,
+                    model_dims=1280,
+                    backend=self.backend
+                )
+                self.model.load_from_checkpoint(repo_id="google/timesfm-1.0-200m")
+                return
+        except Exception:
+            pass
+
+        # 3. Fallback PyTorch Transformer Engine par défaut
+        if HAS_TORCH:
+            logger.info("Initialisation du PyTorch Time-Series Transformer Engine...")
+            self.model = PyTorchTimesFMModel(context_len=self.context_len)
+            if self.backend == "cuda" and torch.cuda.is_available():
+                self.model.to("cuda")
+            self.model.eval()
 
     def predict_next_price(self, close_series: pd.Series) -> float:
         """Prédit le prix de clôture H+1 (5m)."""
@@ -104,11 +104,7 @@ class TimesFMEngine:
         
         if self.model is not None:
             try:
-                if hasattr(self.model, 'forecast'):
-                    forecast_input = [context_data]
-                    forecast_results, _ = self.model.forecast(forecast_input, freq=[0])
-                    return float(forecast_results[0][0])
-                elif isinstance(self.model, PyTorchTimesFMModel) and HAS_TORCH:
+                if isinstance(self.model, PyTorchTimesFMModel) and HAS_TORCH:
                     mean = np.mean(context_data)
                     std = np.std(context_data) + 1e-8
                     norm_ctx = (context_data - mean) / std
@@ -122,8 +118,12 @@ class TimesFMEngine:
                         
                     pred_price = (norm_pred * std) + mean
                     return float(pred_price)
+                elif hasattr(self.model, 'forecast'):
+                    forecast_input = [context_data]
+                    forecast_results, _ = self.model.forecast(forecast_input, freq=[0])
+                    return float(forecast_results[0][0])
             except Exception as ex:
-                logger.error(f"Erreur lors de l'inférence native: {ex}. Fallback.")
+                logger.error(f"Erreur lors de l'inférence: {ex}.")
 
         # Fallback statistique
         recent_changes = np.diff(context_data[-10:])
