@@ -58,8 +58,9 @@ def apply_triple_barrier_and_features(df: pd.DataFrame, pt_mult=1.5, sl_mult=1.0
     feat["volume_zscore"] = (volume - volume.rolling(24).mean()) / (volume.rolling(24).std() + 1e-8)
     
     # Indicateurs Pre-Screening (Skill Momentum Screener)
-    steps_per_day = 288 if interval == "5m" else 24
-    vol_20d_mean = volume.rolling(20 * steps_per_day).mean()
+    steps_per_day = 1440 if interval == "1m" else (288 if interval == "5m" else 24)
+    roll_w = min(len(volume) - 1, 20 * steps_per_day)
+    vol_20d_mean = volume.rolling(roll_w, min_periods=50).mean()
     feat["rvol"] = volume / (vol_20d_mean + 1e-8)
     feat["sma50"] = close.rolling(50).mean()
     feat["sma200"] = close.rolling(200).mean()
@@ -161,7 +162,9 @@ def train_single_asset(ticker: str, max_epochs: int = 150, patience: int = 20, b
     print(f" 🚀 {mode_str} SUR : {ticker}")
     print("=" * 90)
     
-    if interval == "5m" and period == "730d":
+    if interval == "1m":
+        period = "7d"  # Limite Yahoo Finance pour 1m
+    elif interval == "5m" and period == "730d":
         period = "60d"  # Limite Yahoo Finance pour 5m
 
     print(f"[1/5] 📈 Téléchargement du Dataset {interval} pour {ticker} (Période: {period})...")
