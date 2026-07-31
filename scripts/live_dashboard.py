@@ -110,11 +110,9 @@ class TradingDashboardApp:
                 historical_win_rate=max(0.60, meta_confidence)
             )
             
-            # Plafonnement au cap maximal défini par l'utilisateur (ex: 5,000 €)
             allocated_cap = min(pos_info['capital_allocated'], self.max_trade_cap) if final_binary == 1 else 0.0
             units = allocated_cap / current_price if current_price > 0 else 0.0
             
-            # Action code
             if final_binary == 1:
                 action_code = "[A] ACHAT (BUY)"
                 action_color = "bold green"
@@ -122,7 +120,6 @@ class TradingDashboardApp:
                 action_code = "[H] HOLD / [V] VENTE"
                 action_color = "bold yellow"
                 
-            # Exécution sur Alpaca Paper Trading
             pos_dict_custom = pos_info.copy()
             pos_dict_custom['capital_allocated'] = allocated_cap
             exec_res = self.alpaca.execute_bot_cycle(signal, pos_dict_custom, symbol="ETH/USD")
@@ -149,7 +146,6 @@ class TradingDashboardApp:
                 "last_update": datetime.datetime.now().strftime("%H:%M:%S")
             }
             
-            # Historique
             if final_binary == 1:
                 self.trade_history.insert(0, {
                     "time": datetime.datetime.now().strftime("%H:%M:%S"),
@@ -184,7 +180,7 @@ class TradingDashboardApp:
             f"[bold green]{win_rate:.2f}%[/bold green]",
             f"[bold yellow]{self.max_trade_cap:,.2f} €[/bold yellow]"
         )
-        return Panel(table, title="[bold gold1]⚡ BILAN QUANTITATIF & CAPITAL GLOBAL[/bold gold1]", border_style="gold1")
+        return Panel(table, title="[bold yellow]⚡ BILAN QUANTITATIF & CAPITAL GLOBAL[/bold yellow]", border_style="yellow")
 
     def make_signal_panel(self) -> Panel:
         state = self.latest_state
@@ -250,7 +246,7 @@ class TradingDashboardApp:
         mins = remaining_sec // 60
         secs = remaining_sec % 60
         progress_text = f"⏳ PROCHAINE DÉCISION DANS : {mins:02d}m {secs:02d}s (300s Cycle 5m) | Dernier update: {self.latest_state['last_update']} | Appuyez sur Ctrl+C pour quitter"
-        layout["footer"].update(Panel(Align.center(Text(progress_text, style="bold lime")), border_style="lime"))
+        layout["footer"].update(Panel(Align.center(Text(progress_text, style="bold bright_green")), border_style="bright_green"))
         
         return layout
 
