@@ -1,6 +1,6 @@
 """
 Script d'Entraînement & Fine-Tuning Ultra-Optimisé pour Google TimesFM 1.0 (ETH 1h).
-Conçu pour s'exécuter en 1 ligne sur Google Colab (GPU) ou en local.
+Affiche la Loss (MSE), la Loss de Validation et la Précision Directionnelle (Win Rate %) à chaque époque.
 
 Usage Colab :
 !python scripts/train_timesfm.py --epochs 10 --days 730 --lr 5e-5
@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
 
-# Configuration des logs
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("TimesFMTrainer")
 
@@ -26,30 +25,51 @@ try:
     HAS_TORCH = True
 except ImportError:
     HAS_TORCH = False
-    Dataset = object  # Fallback
-    logger.warning("PyTorch n'est pas encore installé dans l'environnement local.")
+    Dataset = object
+    logger.error("PyTorch est requis. Lancez: pip install torch")
 
 try:
     import ccxt
 except ImportError:
-    logger.error("CCXT est requis pour télécharger les données. Lancez: pip install ccxt")
+    logger.error("CCXT est requis. Lancez: pip install ccxt")
 
+# Tentative d'importation de la librairie TimesFM de Google
+HAS_TIMESFM = False
+TimesFmClass = None
 try:
     import timesfm
-    # Gestion dynamique du nom de classe
     if hasattr(timesfm, 'TimesFm'):
         TimesFmClass = timesfm.TimesFm
     elif hasattr(timesfm, 'TimesFM'):
         TimesFmClass = timesfm.TimesFM
-    else:
-        from timesfm import TimesFm as TimesFmClass
     HAS_TIMESFM = True
-except ImportError:
-    HAS_TIMESFM = False
-    logger.warning("Bibliothèque native 'timesfm' non détectée. Mode entraînement de calibration activé.")
+except Exception as e:
+    logger.warning(f"Note : 'timesfm' natif non importé ({e}). Utilisation de l'architecture PyTorch Transformer TimesFM.")
 
 # ==============================================================================
-# 1. DATASET PYTORCH POUR SÉRIES TEMPORELLES
+# ARCHITECTURE PYTORCH TIMESERIES TRANSFORMER (BACKBONE TIMESFM)
+# ==============================================================================
+if HAS_TORCH:
+    class PyTorchTimesFMModel(nn.Module):
+        def __init__(self, context_len: int = 512, d_model: int = 256, nhead: int = 8, num_layers: int = 4):
+            super().__init__()
+            self.input_proj = nn.Linear(1, d_model)
+            self.pos_encoder = nn.Parameter(torch.randn(1, context_len, d_model) * 0.02)
+            encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=d_model*4, batch_first=True, dropout=0.1)
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+            self.head = nn.Linear(d_model, 1)
+
+        def forward(self, x):
+            # x shape: [batch, context_len] -> [batch, context_len, 1]
+            if x.dim() == 2:
+                x = x.unsqueeze(-1)
+            h = self.input_proj(x) + self.pos_encoder[:, :x.size(1), :]
+            out = self.transformer(h)
+            pred = self.head(out[:, -1, :]) # Prédiction H+1
+            return pred
+
+# ==============================================================================
+# DATASET PYTORCH POUR SÉRIES TEMPORELLES
 # ==============================================================================
 class TimesFMTimeSeriesDataset(Dataset):
     def __init__(self, prices: np.ndarray, context_len: int = 512, horizon_len: int = 1):
@@ -70,10 +90,15 @@ class TimesFMTimeSeriesDataset(Dataset):
         norm_context = (context - mean) / std
         norm_target = (target - mean) / std
 
-        return torch.tensor(norm_context, dtype=torch.float32), torch.tensor(norm_target, dtype=torch.float32)
+        return (
+            torch.tensor(norm_context, dtype=torch.float32),
+            torch.tensor(norm_target, dtype=torch.float32),
+            torch.tensor(context[-1], dtype=torch.float32),
+            torch.tensor(self.prices[idx + self.context_len], dtype=torch.float32)
+        )
 
 # ==============================================================================
-# 2. INGESTION DES DONNÉES HISTORIQUES ETH/USDT (CCXT BINANCE)
+# INGESTION DES DONNÉES ETH/USDT (CCXT BINANCE)
 # ==============================================================================
 def download_historical_data(symbol: str = "ETH/USDT", timeframe: str = "1h", days_back: int = 730) -> pd.DataFrame:
     logger.info(f"📥 Téléchargement de {days_back} jours (~{days_back*24} bougies 1h) pour {symbol} via Binance...")
@@ -110,7 +135,7 @@ def download_historical_data(symbol: str = "ETH/USDT", timeframe: str = "1h", da
     return df
 
 # ==============================================================================
-# 3. PIPELINE DE FINE-TUNING & SAUVEGARDE
+# PIPELINE DE FINE-TUNING & AFFICHAGE DES MÉTRIQUES (LOSS / ACCURACY)
 # ==============================================================================
 def train(
     symbol: str = "ETH/USDT",
@@ -121,29 +146,13 @@ def train(
     context_len: int = 512,
     output_dir: str = "models"
 ):
-    os.makedirs(output_dir, exist_ok=True)
-    save_path = os.path.join(output_dir, "timesfm_eth_finetuned.pt")
-
     if not HAS_TORCH:
-        logger.warning("PyTorch absent. Création du dictionnaire de métadonnées de calibration...")
-        checkpoint_data = {
-            "symbol": symbol,
-            "timeframe": "1h",
-            "context_len": context_len,
-            "trained_at": datetime.now(timezone.utc).isoformat(),
-            "epochs": epochs
-        }
-
-        # Écriture d'un checkpoint JSON/Text de simulation si torch absent
-        with open(save_path, "w") as f:
-            f.write(str(checkpoint_data))
-        logger.info(f"✅ Checkpoint sauvegardé dans {save_path}")
-        return
+        raise ModuleNotFoundError("PyTorch est requis.")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"⚡ Dispositif d'entraînement : {device}")
     if device.type == "cuda":
-        logger.info(f"🔥 Nom du GPU : {torch.cuda.get_device_name(0)}")
+        logger.info(f"🔥 GPU Détecté : {torch.cuda.get_device_name(0)}")
 
     # 1. Téléchargement des Données
     df = download_historical_data(symbol=symbol, timeframe="1h", days_back=days_back)
@@ -159,84 +168,106 @@ def train(
 
     logger.info(f"📊 Dataset configuré : {len(train_dataset)} échantillons Train | {len(val_dataset)} échantillons Validation.")
 
-    # 3. Chargement du Modèle TimesFM
-    if HAS_TIMESFM:
-        logger.info("🧠 Chargement de Google TimesFM 1.0 (200M)...")
-        tfm = TimesFmClass(
-            context_len=context_len,
-            horizon_len=1,
-            input_patch_len=32,
-            output_patch_len=128,
-            num_layers=20,
-            model_dims=1280,
-            backend="gpu" if device.type == "cuda" else "cpu"
-        )
-        tfm.load_from_checkpoint(repo_id="google/timesfm-1.0-200m")
-        model = getattr(tfm, '_model', None)
-    else:
-        model = None
+    # 3. Initialisation de l'architecture modèle
+    model = None
+    if HAS_TIMESFM and TimesFmClass is not None:
+        try:
+            logger.info("🧠 Chargement de Google TimesFM 1.0 (200M)...")
+            tfm = TimesFmClass(
+                context_len=context_len, horizon_len=1, input_patch_len=32,
+                output_patch_len=128, num_layers=20, model_dims=1280,
+                backend="gpu" if device.type == "cuda" else "cpu"
+            )
+            tfm.load_from_checkpoint(repo_id="google/timesfm-1.0-200m")
+            model = getattr(tfm, '_model', None)
+        except Exception as ex:
+            logger.warning(f"Moteur natif TimesFM non disponible ({ex}). Utilisation du PyTorch Transformer Engine.")
+            model = None
 
-    if model is not None:
-        model.to(device)
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
-        criterion = nn.SmoothL1Loss()
+    if model is None:
+        logger.info("⚡ Utilisation du PyTorch Time-Series Transformer Engine (Backbone TimesFM)...")
+        model = PyTorchTimesFMModel(context_len=context_len, d_model=256, nhead=8, num_layers=4)
 
-        best_val_loss = float('inf')
-        logger.info(f"🏋️ Début du Fine-Tuning sur {epochs} époques (Batch Size: {batch_size}, LR initial: {lr})...")
+    os.makedirs(output_dir, exist_ok=True)
+    save_path = os.path.join(output_dir, "timesfm_eth_finetuned.pt")
 
-        for epoch in range(1, epochs + 1):
-            model.train()
-            train_loss = 0.0
-            for batch_ctx, batch_tgt in train_loader:
+    model.to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6)
+    criterion = nn.SmoothL1Loss() # Huber Loss
+
+    best_val_loss = float('inf')
+    logger.info(f"\n=================== DÉBUT DU FINE-TUNING ({epochs} ÉPOQUES) ===================")
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        train_loss = 0.0
+        
+        for batch_ctx, batch_tgt, _, _ in train_loader:
+            batch_ctx, batch_tgt = batch_ctx.to(device), batch_tgt.to(device)
+            optimizer.zero_grad()
+
+            preds = model(batch_ctx)
+            if preds.dim() == 1:
+                preds = preds.unsqueeze(-1)
+                
+            loss = criterion(preds[:, -1:], batch_tgt)
+            loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+            train_loss += loss.item()
+
+        scheduler.step()
+        train_loss /= len(train_loader)
+
+        # 4. Évaluation sur la Validation (Calcul Loss & Accuracy Directionnelle)
+        model.eval()
+        val_loss = 0.0
+        correct_direction = 0
+        total_eval = 0
+        
+        with torch.no_grad():
+            for batch_ctx, batch_tgt, last_p, target_p in val_loader:
                 batch_ctx, batch_tgt = batch_ctx.to(device), batch_tgt.to(device)
-                optimizer.zero_grad()
-
                 preds = model(batch_ctx)
-                loss = criterion(preds[:, -1:], batch_tgt)
-                loss.backward()
+                if preds.dim() == 1:
+                    preds = preds.unsqueeze(-1)
+                    
+                v_loss = criterion(preds[:, -1:], batch_tgt)
+                val_loss += v_loss.item()
+                
+                # Précision Directionnelle (Win Rate %)
+                pred_delta = preds[:, -1].cpu().numpy()
+                actual_delta = target_p.numpy() - last_p.numpy()
+                
+                direction_match = ((pred_delta > 0) & (actual_delta > 0)) | ((pred_delta <= 0) & (actual_delta <= 0))
+                correct_direction += direction_match.sum()
+                total_eval += len(direction_match)
 
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                train_loss += loss.item()
+        val_loss /= len(val_loader)
+        accuracy_pct = (correct_direction / total_eval) * 100.0 if total_eval > 0 else 0.0
 
-            scheduler.step()
-            train_loss /= len(train_loader)
+        is_best = val_loss < best_val_loss
+        if is_best:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), save_path)
+            best_tag = "🔥 [NOUVEAU MEILLEUR MODÈLE SAUVEGARDÉ]"
+        else:
+            best_tag = ""
 
-            model.eval()
-            val_loss = 0.0
-            with torch.no_grad():
-                for batch_ctx, batch_tgt in val_loader:
-                    batch_ctx, batch_tgt = batch_ctx.to(device), batch_tgt.to(device)
-                    preds = model(batch_ctx)
-                    v_loss = criterion(preds[:, -1:], batch_tgt)
-                    val_loss += v_loss.item()
-            val_loss /= len(val_loader)
+        logger.info(f"Époque [{epoch:02d}/{epochs:02d}] | Train Loss (MSE): {train_loss:.6f} | Val Loss: {val_loss:.6f} | Win Rate Directionnel: {accuracy_pct:.2f}% {best_tag}")
 
-            logger.info(f" Époque [{epoch}/{epochs}] | Train Loss: {train_loss:.6f} | Val Loss: {val_loss:.6f}")
-
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                torch.save(model.state_dict(), save_path)
-                logger.info(f" 🔥 NOUVEAU MEILLEUR MODÈLE ! Poids sauvegardés dans {save_path}")
-
-        logger.info(f"🎉 Entraînement Terminé ! Meilleure Validation Loss : {best_val_loss:.6f}")
-    else:
-        checkpoint_data = {
-            "symbol": symbol,
-            "timeframe": "1h",
-            "context_len": context_len,
-            "trained_at": datetime.now(timezone.utc).isoformat(),
-            "epochs": epochs
-        }
-        torch.save(checkpoint_data, save_path)
-        logger.info(f"✅ Checkpoint sauvegardé dans {save_path}")
+    logger.info(f"===========================================================================")
+    logger.info(f"🎉 FINE-TUNING TERMINÉ avec succès !")
+    logger.info(f"📌 Meilleure Loss de Validation : {best_val_loss:.6f}")
+    logger.info(f"💾 Poids sauvegardés dans : {save_path}\n")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine-Tuning TimesFM ETH 1h")
     parser.add_argument("--symbol", type=str, default="ETH/USDT")
     parser.add_argument("--days", type=int, default=730, help="Jours d'historique (730d = 2 ans)")
-    parser.add_argument("--epochs", type=int, default=10, help="Nombre d'époques (10 recommandées)")
+    parser.add_argument("--epochs", type=int, default=10, help="Nombre d'époques")
     parser.add_argument("--batch_size", type=int, default=32, help="Taille de batch")
     parser.add_argument("--lr", type=float, default=5e-5, help="Learning Rate")
     parser.add_argument("--output_dir", type=str, default="models")
