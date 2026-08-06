@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
 """
-Dashboard Terminal Dynamique Interactif & Live Engine (Rich UI).
-Interface SOTA en temps réel sans défilement de print :
-- Capital Initial (--budget, ex: 20,000 €)
-- Plafond Max par Trade (--max-cap, ex: 5,000 €) avec Sizing Kelly
-- Bilan des Gains/Pertes en Temps Réel (€ / %) & Win Rate
-- Signal clair : [A] ACHAT / [V] VENTE / [H] HOLD
-- Compte à Rebours Live 5 Min (300s) avec barre de progression
-- Historique des Ordres & Statistiques Quantitatives
+Dashboard Terminal Dynamique Pro (Rich UI) — Responsive Single-Page Layout.
+Design Pro & Responsive : tout tient sur 1 seule page sans aucun défilement, adaptatif à toutes les tailles de terminal.
 """
 import os
 import sys
@@ -77,7 +71,7 @@ class TradingDashboardApp:
             "pred_return_pct": 0.0,
             "confidence": 0.0,
             "action_code": "[H] HOLD",
-            "action_color": "yellow",
+            "action_color": "bold yellow",
             "rvol": 1.0,
             "capital_allocated": 0.0,
             "units": 0.0,
@@ -115,7 +109,7 @@ class TradingDashboardApp:
             
             if final_binary == 1:
                 action_code = "[A] ACHAT (BUY)"
-                action_color = "bold green"
+                action_color = "bold bright_green"
             else:
                 action_code = "[H] HOLD / [V] VENTE"
                 action_color = "bold yellow"
@@ -126,9 +120,9 @@ class TradingDashboardApp:
             
             acc = self.alpaca.fetch_account()
             if acc.get('status') == 'connected':
-                alpaca_status = f"Alpaca N° {acc.get('account_number')} (${acc.get('cash'):,.2f} Cash)"
+                alpaca_status = f"Alpaca PA3T5NINSLGS (${acc.get('cash'):,.2f})"
             else:
-                alpaca_status = f"Execution: {exec_res.get('action')}"
+                alpaca_status = f"Status: {exec_res.get('action')}"
                 
             self.latest_state = {
                 "price": current_price,
@@ -149,13 +143,13 @@ class TradingDashboardApp:
             if final_binary == 1:
                 self.trade_history.insert(0, {
                     "time": datetime.datetime.now().strftime("%H:%M:%S"),
-                    "action": "ACHAT [A]",
+                    "action": "[A] ACHAT",
                     "price": f"${current_price:,.2f}",
                     "amount": f"${allocated_cap:,.2f}",
                     "result": "EN COURS ⏳",
                     "pnl": "+0.00 €"
                 })
-                if len(self.trade_history) > 6:
+                if len(self.trade_history) > 4:
                     self.trade_history.pop()
                     
         except Exception as e:
@@ -164,9 +158,9 @@ class TradingDashboardApp:
     def make_header_panel(self) -> Panel:
         win_rate = (self.wins / (self.wins + self.losses) * 100.0) if (self.wins + self.losses) > 0 else 75.00
         pnl_pct = (self.total_pnl / self.initial_budget) * 100.0
-        pnl_color = "green" if self.total_pnl >= 0 else "red"
+        pnl_color = "bright_green" if self.total_pnl >= 0 else "bright_red"
         
-        table = Table(expand=True, show_header=True, header_style="bold cyan", box=None)
+        table = Table(expand=True, show_header=True, header_style="bold bright_cyan", box=None)
         table.add_column("BUDGET INITIAL", justify="center")
         table.add_column("SOLDE ACTUEL", justify="center")
         table.add_column("GAIN / PERTE CUMULÉ", justify="center")
@@ -177,7 +171,7 @@ class TradingDashboardApp:
             f"[bold white]{self.initial_budget:,.2f} €[/bold white]",
             f"[bold white]{self.current_balance:,.2f} €[/bold white]",
             f"[bold {pnl_color}]{self.total_pnl:+,.2f} € ({pnl_pct:+.2f}%)[/bold {pnl_color}]",
-            f"[bold green]{win_rate:.2f}%[/bold green]",
+            f"[bold bright_green]{win_rate:.2f}%[/bold bright_green]",
             f"[bold yellow]{self.max_trade_cap:,.2f} €[/bold yellow]"
         )
         return Panel(table, title="[bold yellow]⚡ BILAN QUANTITATIF & CAPITAL GLOBAL[/bold yellow]", border_style="yellow")
@@ -185,32 +179,32 @@ class TradingDashboardApp:
     def make_signal_panel(self) -> Panel:
         state = self.latest_state
         table = Table(expand=True, show_header=False, box=None)
-        table.add_column("Metric", style="bold white", width=30)
+        table.add_column("Metric", style="bold white")
         table.add_column("Value", justify="right")
         
-        pred_color = "green" if state['pred_return_pct'] > 0 else "red"
+        pred_color = "bright_green" if state['pred_return_pct'] > 0 else "bright_red"
         
-        table.add_row("• PRIX ETH/USD ACTUEL", f"[bold white]${state['price']:,.2f}[/bold white]")
-        table.add_row("• PRÉDICTION TIMESFM H+1", f"[bold {pred_color}]${state['pred_price']:,.2f} ({state['pred_return_pct']:+.4f}%)[/bold {pred_color}]")
-        table.add_row("• CONFIANCE XGBOOST", f"[bold cyan]{state['confidence']:.2f}%[/bold cyan] (Seuil >= {config.min_meta_confidence*100:.0f}%)")
-        table.add_row("• PRE-SCREENING RVOL", f"[bold magenta]RVOL = {state['rvol']:.2f}[/bold magenta]")
-        table.add_row("• ACTION DECIDÉE", f"[{state['action_color']}]{state['action_code']}[/{state['action_color']}]")
+        table.add_row("PRIX ETH/USD ACTUEL", f"[bold white]${state['price']:,.2f}[/bold white]")
+        table.add_row("PRÉDICTION TIMESFM H+1", f"[bold {pred_color}]${state['pred_price']:,.2f} ({state['pred_return_pct']:+.4f}%)[/bold {pred_color}]")
+        table.add_row("CONFIANCE XGBOOST", f"[bold bright_cyan]{state['confidence']:.2f}%[/bold bright_cyan] (Seuil >= {config.min_meta_confidence*100:.0f}%)")
+        table.add_row("PRE-SCREENING RVOL", f"[bold magenta]RVOL = {state['rvol']:.2f}[/bold magenta]")
+        table.add_row("ACTION DÉCIDÉE", f"[{state['action_color']}]{state['action_code']}[/{state['action_color']}]")
         
-        return Panel(table, title="[bold cyan]📊 SIGNAL & DÉCISION DE TRADING (5M)[/bold cyan]", border_style="cyan")
+        return Panel(table, title="[bold bright_cyan]📊 SIGNAL & DÉCISION IA (5M)[/bold bright_cyan]", border_style="bright_cyan")
 
     def make_risk_panel(self) -> Panel:
         state = self.latest_state
         table = Table(expand=True, show_header=False, box=None)
-        table.add_column("Metric", style="bold white", width=30)
+        table.add_column("Metric", style="bold white")
         table.add_column("Value", justify="right")
         
-        table.add_row("• SOMME MISÉE SUR TRADE", f"[bold yellow]${state['capital_allocated']:,.2f}[/bold yellow] (Max Cap: ${self.max_trade_cap:,.2f})")
-        table.add_row("• UNITÉS ETH ACHETÉES", f"[bold white]{state['units']:.4f} ETH[/bold white]")
-        table.add_row("• STOP-LOSS (1.0x ATR)", f"[bold red]${state['stop_loss']:,.2f}[/bold red]")
-        table.add_row("• TAKE-PROFIT (1.5x ATR)", f"[bold green]${state['take_profit']:,.2f}[/bold green]")
-        table.add_row("• STATUT BROKER ALPACA", f"[bold green]{state['alpaca_status']}[/bold green]")
+        table.add_row("SOMME MISÉE SUR TRADE", f"[bold yellow]${state['capital_allocated']:,.2f}[/bold yellow] (Cap Max: ${self.max_trade_cap:,.2f})")
+        table.add_row("UNITÉS ETH ACHETÉES", f"[bold white]{state['units']:.4f} ETH[/bold white]")
+        table.add_row("STOP-LOSS (1.0x ATR)", f"[bold bright_red]${state['stop_loss']:,.2f}[/bold bright_red]")
+        table.add_row("TAKE-PROFIT (1.5x ATR)", f"[bold bright_green]${state['take_profit']:,.2f}[/bold bright_green]")
+        table.add_row("STATUT BROKER ALPACA", f"[bold bright_green]{state['alpaca_status']}[/bold bright_green]")
         
-        return Panel(table, title="[bold yellow]🛡️ RISK SIZING & EXÉCUTION BROKER[/bold yellow]", border_style="yellow")
+        return Panel(table, title="[bold yellow]🛡️ RISK SIZING & BROKER[/bold yellow]", border_style="yellow")
 
     def make_history_table(self) -> Panel:
         table = Table(expand=True, show_header=True, header_style="bold magenta", box=None)
@@ -222,42 +216,42 @@ class TradingDashboardApp:
         table.add_column("PNL (€)", justify="center")
         
         if not self.trade_history:
-            table.add_row("N/A", "EN ATTENTE [H]", f"${self.latest_state['price']:,.2f}", "0.00 €", "ACTIF", "+0.00 €")
+            table.add_row("N/A", "[H] HOLD", f"${self.latest_state['price']:,.2f}", "0.00 €", "ACTIF", "+0.00 €")
         else:
             for t in self.trade_history:
                 table.add_row(t['time'], t['action'], t['price'], t['amount'], t['result'], t['pnl'])
                 
-        return Panel(table, title="[bold magenta]📜 HISTORIQUE DES DÉCISIONS EN TEMPS RÉEL[/bold magenta]", border_style="magenta")
+        return Panel(table, title="[bold magenta]📜 HISTORIQUE EN TEMPS RÉEL[/bold magenta]", border_style="magenta")
 
     def make_layout(self, remaining_sec: int) -> Layout:
         layout = Layout()
+        # Ratios flexibles pour 100% responsive et fit sur 1 seule page
         layout.split_column(
-            Layout(self.make_header_panel(), size=5),
-            Layout(name="middle", size=9),
-            Layout(self.make_history_table(), size=8),
-            Layout(name="footer", size=3)
+            Layout(self.make_header_panel(), ratio=2),
+            Layout(name="middle", ratio=4),
+            Layout(self.make_history_table(), ratio=3),
+            Layout(name="footer", ratio=1)
         )
         
         layout["middle"].split_row(
-            Layout(self.make_signal_panel()),
-            Layout(self.make_risk_panel())
+            Layout(self.make_signal_panel(), ratio=1),
+            Layout(self.make_risk_panel(), ratio=1)
         )
         
         mins = remaining_sec // 60
         secs = remaining_sec % 60
-        progress_text = f"⏳ PROCHAINE DÉCISION DANS : {mins:02d}m {secs:02d}s (300s Cycle 5m) | Dernier update: {self.latest_state['last_update']} | Appuyez sur Ctrl+C pour quitter"
+        progress_text = f"⏳ PROCHAINE DÉCISION DANS : {mins:02d}m {secs:02d}s (Cycle 5m) | Update: {self.latest_state['last_update']} | Appuyez sur Ctrl+C pour quitter"
         layout["footer"].update(Panel(Align.center(Text(progress_text, style="bold bright_green")), border_style="bright_green"))
         
         return layout
 
 def main():
-    parser = argparse.ArgumentParser(description="Live Dashboard Trading Terminal")
+    parser = argparse.ArgumentParser(description="Live Dashboard Trading Terminal Pro")
     parser.add_argument("--budget", type=float, default=20000.0, help="Capital budget initial (€ / $)")
     parser.add_argument("--max-cap", type=float, default=5000.0, help="Plafond max misé par trade (€ / $)")
     args = parser.parse_args()
     
     app = TradingDashboardApp(initial_budget=args.budget, max_trade_cap=args.max_cap)
-    
     app.run_single_cycle()
     
     cycle_duration = 300
@@ -271,7 +265,7 @@ def main():
                 
                 app.run_single_cycle()
         except KeyboardInterrupt:
-            print("\n🛑 Arrêt du Dashboard Live Terminal.")
+            print("\n🛑 Arrêt du Dashboard Live Terminal Pro.")
 
 if __name__ == "__main__":
     main()

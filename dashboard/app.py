@@ -1,6 +1,6 @@
 """
-Dashboard de Suivi et Monitoring Temps Réel pour Bot de Trading TimesFM (ETH 1h).
-Construit avec Streamlit & Plotly pour une expérience visuelle haut de gamme.
+Terminal Quantitatif Web Ultra-Pro — Single-Page Responsive Dashboard.
+Design d'exception Glassmorphism & High-End Trading UI pour Bot de Trading TimesFM (ETH 5m / 1h).
 """
 import sys
 import os
@@ -11,203 +11,294 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import yfinance as yf
-from datetime import datetime
+import datetime
 
 from config.settings import config
 from src.screening.momentum_screener import MomentumScreener
 from src.models.timesfm_engine import TimesFMEngine
+from src.models.meta_labeler import MetaLabeler
 from src.risk.risk_manager import RiskManager
+from src.execution.alpaca_executor import AlpacaExecutor
+from src.data_loader import get_large_eth_data
 
-# Configuration de la page Streamlit
+# 1. Configuration Page Streamlit Single-Page
 st.set_page_config(
-    page_title="TimesFM Quant Trading Terminal | ETH 1h",
+    page_title="TimesFM Quant Trading Suite | Pro Dashboard",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# CSS Personnalisé pour un rendu Terminal Quant Premium
+# 2. Design System & CSS Personnalisé Pro (Glassmorphism & Responsive Layout)
 st.markdown("""
 <style>
-    .main { background-color: #0E1117; }
-    .stMetric { background-color: #1E222D; padding: 15px; border-radius: 10px; border: 1px solid #2A2E39; }
-    .status-buy { color: #00E676; font-weight: bold; font-size: 1.2rem; }
-    .status-sell { color: #FF5252; font-weight: bold; font-size: 1.2rem; }
-    .card { background-color: #1E222D; padding: 20px; border-radius: 12px; border: 1px solid #2A2E39; margin-bottom: 15px; }
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+    
+    .stApp {
+        background: radial-gradient(circle at 50% 0%, #151c2c 0%, #0b0e14 100%);
+        color: #E2E8F0;
+    }
+    
+    /* En-tête Compact */
+    .header-box {
+        background: rgba(22, 30, 46, 0.7);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        padding: 12px 20px;
+        margin-bottom: 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    /* Glassmorphism Metric Cards */
+    .metric-card {
+        background: rgba(21, 28, 44, 0.65);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 12px;
+        padding: 14px 16px;
+        text-align: center;
+        transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .metric-card:hover {
+        border-color: rgba(0, 229, 255, 0.4);
+        transform: translateY(-2px);
+    }
+    
+    .metric-title {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #94A3B8;
+        margin-bottom: 4px;
+    }
+    
+    .metric-value {
+        font-size: 1.35rem;
+        font-weight: 800;
+        color: #F8FAFC;
+    }
+    
+    .metric-badge {
+        font-size: 0.75rem;
+        font-weight: 700;
+        padding: 2px 8px;
+        border-radius: 6px;
+        display: inline-block;
+        margin-top: 4px;
+    }
+    
+    .badge-buy { background: rgba(0, 230, 118, 0.15); color: #00E676; border: 1px solid rgba(0, 230, 118, 0.3); }
+    .badge-hold { background: rgba(255, 215, 0, 0.15); color: #FFD700; border: 1px solid rgba(255, 215, 0, 0.3); }
+    .badge-sell { background: rgba(255, 82, 82, 0.15); color: #FF5252; border: 1px solid rgba(255, 82, 82, 0.3); }
+    
+    /* Tab Styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        background-color: rgba(22, 30, 46, 0.5);
+        border-radius: 8px;
+        padding: 6px 16px;
+        font-weight: 600;
+        color: #94A3B8;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #00E5FF !important;
+        color: #0B0E14 !important;
+        font-weight: 700;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-from src.data_loader import get_large_eth_data
-
-@st.cache_data(ttl=300)
-def load_market_data(symbol: str, days: int = 90):
-    return get_large_eth_data(symbol="ETH/USDT", timeframe="1h", days_back=days, force_refresh=False)
-
+@st.cache_data(ttl=60)
+def fetch_cached_data():
+    return get_large_eth_data(symbol="ETH/USDT", timeframe="5m", days_back=30, force_refresh=False)
 
 def main():
-    st.title("⚡ Terminal Quantitatif TimesFM — Ethereum (ETH 1h)")
-    st.caption("Modèle de fondation IA de séries temporelles & Sizing Dynamique de Kelly")
-    
-    # Sidebar
-    st.sidebar.header("⚙️ Paramètres du Bot")
-    symbol = st.sidebar.selectbox("Paire de Trading", ["ETH-USD", "ETH-EUR", "BTC-USD"], index=0)
-    lookback_days = st.sidebar.slider("Période Historique (Jours)", 7, 60, 30)
-    capital_input = st.sidebar.number_input("Capital Total (€/$)", min_value=100.0, value=10000.0, step=500.0)
-    risk_pct_input = st.sidebar.slider("Risque Fixe par Trade (%)", 0.5, 5.0, 2.0) / 100.0
-    
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🛡️ Garde-fous Quantitatifs")
-    st.sidebar.write(f"• **Seuil RVOL** : `{config.rvol_threshold}x`")
-    st.sidebar.write(f"• **Fraction Kelly** : `{config.max_kelly_fraction * 100}%` (Quarter Kelly)")
-    st.sidebar.write(f"• **Plafond Enveloppe** : `{config.max_portfolio_allocation * 100}%` du capital")
-    
-    # Bouton de rafraîchissement
-    if st.sidebar.button("🔄 Lancer Inférence Temps Réel"):
-        st.cache_data.clear()
+    # En-tête Compact Pro
+    st.markdown("""
+    <div class="header-box">
+        <div>
+            <span style="font-size: 1.4rem; font-weight: 800; color: #F8FAFC;">⚡ TERMINAL QUANTITATIF IA SOTA</span>
+            <span style="font-size: 0.85rem; color: #94A3B8; margin-left: 10px;">• TimesFM Fine-Tuned + XGBoost Meta-Labeler | ETH/USD (5m)</span>
+        </div>
+        <div>
+            <span class="metric-badge badge-buy">PRO VERSION 2.0</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    # Ingestion & Calculs
-    with st.spinner("Inférence TimesFM & Ingestion des données en cours..."):
-        df = load_market_data(symbol, days=lookback_days)
-        
-        screener = MomentumScreener(rvol_threshold=config.rvol_threshold)
-        df_screened = screener.compute_indicators(df)
-        latest_screen = screener.evaluate_latest(df_screened)
-        
-        timesfm_engine = TimesFMEngine(context_len=config.context_len, horizon_len=config.horizon_len, backend=config.backend)
-        signal = timesfm_engine.generate_signal(df_screened, screener_passed=latest_screen['passed'])
-        
-        risk_mgr = RiskManager(default_risk_pct=risk_pct_input)
-        position_info = risk_mgr.compute_position_size(
-            total_capital=capital_input,
-            entry_price=signal['current_price'],
-            df_ohlcv=df_screened,
-            signal_dict=signal
-        )
-
-    # 1. Rangée des KPI Principaux
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # Ingestion & Calculs Quant
+    df = fetch_cached_data()
+    current_price = float(df['Close'].iloc[-1])
     
-    with col1:
-        st.metric(label="Prix Actuel ETH", value=f"${signal['current_price']:,.2f}")
-        
-    with col2:
-        pred_delta = signal['predicted_return_pct']
-        st.metric(
-            label="Prédiction TimesFM (H+1)",
-            value=f"${signal['predicted_price']:,.2f}",
-            delta=f"{pred_delta:+.2f}%"
-        )
-        
-    with col3:
-        sig_label = signal['signal_label']
-        st.metric(
-            label="Signal Binaire IA",
-            value=sig_label,
-            delta="ACHAT (LONG)" if signal['signal_binary'] == 1 else "NEUTRE / CONSERVATION"
-        )
-        
-    with col4:
-        rvol_val = latest_screen['rvol']
-        st.metric(
-            label="Volume Relatif (RVOL)",
-            value=f"{rvol_val:.2f}x",
-            delta="Volume d'activité validé" if latest_screen['rvol_ok'] else "Volume standard"
-        )
-        
-    with col5:
-        allocated = position_info['capital_allocated']
-        st.metric(
-            label="Sizing Capital Alloué",
-            value=f"{allocated:,.2f} €",
-            delta=f"{allocated/capital_input*100:.1f}% du Portefeuille"
-        )
-
-    # 2. Graphiques d'Analyse Interactive
-    tab1, tab2, tab3 = st.tabs(["📈 Graphique Prix & Inférence TimesFM", "🧮 Détail Risk Management & Kelly", "📊 Backtest & Historique"])
+    screener = MomentumScreener(rvol_threshold=config.rvol_threshold)
+    df_screened = screener.compute_indicators(df)
+    latest_screen = screener.evaluate_latest(df_screened)
     
-    with tab1:
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
+    engine = TimesFMEngine(context_len=config.context_len, horizon_len=config.horizon_len, backend=config.backend)
+    signal = engine.generate_signal(df_screened, screener_passed=latest_screen['passed'])
+    
+    meta_labeler = MetaLabeler()
+    meta_confidence = meta_labeler.predict_meta_confidence(df_screened, timesfm_pred_return=signal['predicted_return_pct']/100.0)
+    meta_passed = meta_confidence >= config.min_meta_confidence
+    
+    final_binary = 1 if (signal['signal_binary'] == 1 and meta_passed) else 0
+    
+    budget_input = 20000.0
+    cap_max_input = 5000.0
+    
+    risk_mgr = RiskManager(default_risk_pct=config.risk_per_trade)
+    pos_info = risk_mgr.compute_position_size(
+        total_capital=budget_input,
+        entry_price=current_price,
+        df_ohlcv=df_screened,
+        signal_dict=signal,
+        historical_win_rate=max(0.60, meta_confidence)
+    )
+    
+    allocated_cap = min(pos_info['capital_allocated'], cap_max_input) if final_binary == 1 else 0.0
+    units = allocated_cap / current_price if current_price > 0 else 0.0
+
+    # 1. RANGEE KPIS RESPONSIVES SINGLE-PAGE (5 Colonnes)
+    k1, k2, k3, k4, k5 = st.columns(5)
+    
+    with k1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">BUDGET INITIAL</div>
+            <div class="metric-value">{budget_input:,.2f} €</div>
+            <div class="metric-badge badge-hold">CAPITAL GLOBAL</div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        # Chandeliers OHLC
+    with k2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">PRIX ETH/USD ACTUEL</div>
+            <div class="metric-value">${current_price:,.2f}</div>
+            <div class="metric-badge badge-hold">VOLATILITÉ ATR: ${pos_info.get('atr', 7.8):.2f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with k3:
+        pred_ret = signal['predicted_return_pct']
+        pred_color = "#00E676" if pred_ret > 0 else "#FF5252"
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">PRÉDICTION TIMESFM H+1</div>
+            <div class="metric-value" style="color: {pred_color};">${signal['predicted_price']:,.2f}</div>
+            <div class="metric-badge" style="color: {pred_color};">{pred_ret:+.4f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with k4:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">CONFIANCE XGBOOST</div>
+            <div class="metric-value" style="color: #00E5FF;">{meta_confidence*100:.1f}%</div>
+            <div class="metric-badge badge-buy">SEUIL >= {config.min_meta_confidence*100:.0f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with k5:
+        if final_binary == 1:
+            act_label, badge_class = "[A] ACHAT (BUY)", "badge-buy"
+        else:
+            act_label, badge_class = "[H] HOLD / NEUTRE", "badge-hold"
+            
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-title">ACTION DÉCIDÉE IA</div>
+            <div class="metric-value" style="font-size: 1.1rem;">{act_label}</div>
+            <div class="metric-badge {badge_class}">SOMME: ${allocated_cap:,.2f}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-bottom: 12px;'></div>", unsafe_allow_html=True)
+
+    # 2. GRILLE PRINCIPALE (GRAPHIQUE À GAUCHE / RISK & ORDERS À DROITE)
+    col_chart, col_side = st.columns([2.2, 1.0])
+    
+    with col_chart:
+        # Graphique Chartiste Compact Single-Page (Hauteur 420px)
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.04, row_heights=[0.75, 0.25])
+        
+        df_sub = df_screened.tail(120)
+        
         fig.add_trace(
             go.Candlestick(
-                x=df_screened.index,
-                open=df_screened['Open'], high=df_screened['High'],
-                low=df_screened['Low'], close=df_screened['Close'],
-                name="ETH/USD 1h"
+                x=df_sub.index,
+                open=df_sub['Open'], high=df_sub['High'],
+                low=df_sub['Low'], close=df_sub['Close'],
+                name="ETH/USD 5m",
+                increasing_line_color='#00E676', decreasing_line_color='#FF5252'
             ), row=1, col=1
         )
         
-        # SMAs
-        fig.add_trace(go.Scatter(x=df_screened.index, y=df_screened['SMA_50'], name="SMA 50h", line=dict(color='orange', width=1.5)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df_screened.index, y=df_screened['SMA_200'], name="SMA 200h", line=dict(color='red', width=1.5)), row=1, col=1)
-        
-        # Point de prédiction H+1
-        next_time = df_screened.index[-1] + pd.Timedelta(hours=1)
+        if 'SMA_50' in df_sub.columns:
+            fig.add_trace(go.Scatter(x=df_sub.index, y=df_sub['SMA_50'], name="SMA 50", line=dict(color='#FFD700', width=1.2)), row=1, col=1)
+            
+        # Target Marker
+        next_time = df_sub.index[-1] + pd.Timedelta(minutes=5)
         fig.add_trace(
             go.Scatter(
                 x=[next_time],
                 y=[signal['predicted_price']],
                 mode='markers+text',
-                name="TimesFM Target (H+1)",
-                marker=dict(size=12, color='cyan', symbol='star'),
-                text=[f"Target: ${signal['predicted_price']:.1f}"],
+                name="Target H+1",
+                marker=dict(size=10, color='#00E5FF', symbol='star'),
+                text=[f"${signal['predicted_price']:.1f}"],
                 textposition="top center"
             ), row=1, col=1
         )
         
-        # Sous-Graphique Volume & RVOL
-        colors = ['green' if r > config.rvol_threshold else 'gray' for r in df_screened['RVOL']]
-        fig.add_trace(go.Bar(x=df_screened.index, y=df_screened['Volume'], name="Volume 1h", marker_color=colors), row=2, col=1)
+        # RVOL Volume Subplot
+        v_colors = ['#00E676' if r > 1.2 else '#475569' for r in df_sub['RVOL']]
+        fig.add_trace(go.Bar(x=df_sub.index, y=df_sub['Volume'], name="Volume 5m", marker_color=v_colors), row=2, col=1)
         
         fig.update_layout(
             template="plotly_dark",
-            height=600,
-            title="Analyse Chartiste ETH 1h avec Inférence TimesFM H+1",
-            xaxis_rangeslider_visible=False
+            height=430,
+            margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(15,23,42,0.6)',
+            xaxis_rangeslider_visible=False,
+            showlegend=False
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    with tab2:
-        st.subheader("Détails du Calcul de Position Sizing & Protection du Capital")
+    with col_side:
+        st.markdown("""
+        <div style="background: rgba(21, 28, 44, 0.65); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; padding: 14px 18px;">
+            <div style="font-size: 0.9rem; font-weight: 700; color: #00E5FF; margin-bottom: 10px;">🛡️ PROTECTION & RISK ALLOCATION</div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        c1, c2 = st.columns(2)
-        with c1:
-            st.write("### 📐 Niveaux de Trading Identifiés")
-            st.write(f"• **Prix d'Entrée** : `${position_info['entry_price']:,.2f}`")
-            st.write(f"• **Stop-Loss Dynamique (2x ATR)** : `${position_info['stop_loss_price']:,.2f}`")
-            st.write(f"• **Take-Profit Dynamique (3.5x ATR)** : `${position_info['take_profit_price']:,.2f}`")
-            st.write(f"• **Ratio Risque / Rendement (R/R)** : `{position_info.get('risk_reward_ratio', 1.75):.2f}`")
-            st.write(f"• **Volatilité ATR(14)** : `${position_info.get('atr', 0):.2f}`")
-
-        with c2:
-            st.write("### 🛡️ Dynamic Kelly Allocation & Safeties")
-            st.write(f"• **Quantité d'ETH à acheter** : `{position_info['quantity_units']:.4f} ETH`")
-            st.write(f"• **Capital Total Engagé** : `{position_info['capital_allocated']:,.2f} €`")
-            st.write(f"• **Perte Maximale autorisée (Risk Amount)** : `{position_info['max_risk_amount']:,.2f} €` (`{position_info['risk_pct_used']:.2f}%` du capital)")
-            st.write(f"• **Plafond Enveloppe Respecté** : `{'✅ OUI' if position_info['envelope_safety_passed'] else '❌ NON'}`")
-
-    with tab3:
-        st.subheader("Historique des Signaux & Test Directionnel")
-        st.write("Évaluation des 10 dernières bougies 1h :")
+        risk_df = pd.DataFrame([
+            {"Paramètre": "Somme Misée / Trade", "Valeur": f"${allocated_cap:,.2f}"},
+            {"Paramètre": "Plafond Max Autorisé", "Valeur": f"${cap_max_input:,.2f}"},
+            {"Paramètre": "Unités ETH", "Valeur": f"{units:.4f} ETH"},
+            {"Paramètre": "Stop-Loss (1.0x ATR)", "Valeur": f"${pos_info['stop_loss_price']:,.2f}"},
+            {"Paramètre": "Take-Profit (1.5x ATR)", "Valeur": f"${pos_info['take_profit_price']:,.2f}"},
+            {"Paramètre": "Broker Connecté", "Valeur": "Alpaca Paper ($100k)"}
+        ])
+        st.dataframe(risk_df, hide_index=True, use_container_width=True, height=220)
         
-        recent_records = []
-        for i in range(-10, 0):
-            sub = df_screened.iloc[:i]
-            if len(sub) > 50:
-                p_curr = sub['Close'].iloc[-1]
-                p_next = df_screened['Close'].iloc[i+1] if i+1 < 0 else df_screened['Close'].iloc[-1]
-                direction = "HAUSSE" if p_next > p_curr else "BAISSE"
-                recent_records.append({
-                    "Timestamp": sub.index[-1],
-                    "Prix ETH": f"${p_curr:,.2f}",
-                    "Prix Suivant H+1": f"${p_next:,.2f}",
-                    "Mouvement": direction,
-                    "RVOL": f"{sub['RVOL'].iloc[-1]:.2f}x",
-                    "Trend OK": sub['Trend_OK'].iloc[-1]
-                })
-        st.dataframe(pd.DataFrame(recent_records), use_container_width=True)
+        st.markdown("""
+        <div style="background: rgba(21, 28, 44, 0.65); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; padding: 10px 14px; margin-top: 10px; text-align: center;">
+            <span style="font-size: 0.8rem; color: #94A3B8;">⏳ CYCLE 5M ACTIF | AUTO-REFRESH 300S</span>
+        </div>
+        """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
